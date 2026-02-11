@@ -43,6 +43,8 @@ To use NotionSketch, you need a Notion database to store your sketches.
 2.  Open `NotionSketch.xcodeproj` in Xcode.
 3.  Build and run on an iPad Simulator or Device.
 
+You can also look into something like [Sidestore](https://sidestore.io) to have it stay without having to rebuild it
+
 ### 3. App Configuration
 
 1.  Launch NotionSketch.
@@ -63,10 +65,6 @@ To use NotionSketch, you need a Notion database to store your sketches.
 - iOS/iPadOS 17.0+
 - Xcode 15.0+
 - A Notion Account
-
-## 🤝 Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request for any bugs or feature enhancements.
 
 ## 📄 License
 
