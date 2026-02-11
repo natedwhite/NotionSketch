@@ -1,12 +1,10 @@
 # NotionSketch
 
-NotionSketch is a powerful iPadOS application that bridges the gap between freeform sketching and structured knowledge management in Notion. Built with SwiftUI and PencilKit, it allows you to create infinite canvas drawings that automatically sync to your Notion workspace.
-
-![NotionSketch](https://via.placeholder.com/800x400?text=NotionSketch+Preview)
+NotionSketch is a powerful iPadOS application that bridges the gap between freeform sketching and structured knowledge management in Notion. Built with SwiftUI and PencilKit, it allows you to create expansive canvas drawings that automatically sync to your Notion workspace.
 
 ## ✨ Features
 
-- **Infinite Canvas**: Draw without limits using the high-performance PencilKit engine.
+- **Expansive Canvas**: Draw freely on a large digital canvas using the high-performance PencilKit engine.
 - **Bi-Directional Sync**:
   - **Drawings**: Automatically uploaded as images to Notion page blocks.
   - **OCR**: Handwritten text is recognized on-device and synced to a text property in Notion.
