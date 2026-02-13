@@ -396,12 +396,22 @@ struct CanvasView: View {
                 }
 
                 // Force sync button
-                Button {
-                    viewModel.forceSyncNow()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath")
+                if NetworkMonitor.shared.isConnected {
+                    Button {
+                        viewModel.forceSyncNow()
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(viewModel.syncState == .syncing || viewModel.currentDrawing.strokes.isEmpty)
+                } else {
+                    Button {
+                        // No-op or show alert if desired
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                    .disabled(true)
                 }
-                .disabled(viewModel.syncState == .syncing || viewModel.currentDrawing.strokes.isEmpty)
             }
         }
         .task {

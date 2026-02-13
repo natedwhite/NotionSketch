@@ -293,8 +293,16 @@ actor NotionService {
 
     private let session: URLSession
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        if let session = session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = 15 // Fail quickly on timeout
+            config.timeoutIntervalForResource = 30
+            config.waitsForConnectivity = false // Don't hang waiting for connection
+            self.session = URLSession(configuration: config)
+        }
     }
 
     // MARK: - Token Access

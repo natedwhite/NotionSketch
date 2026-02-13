@@ -12,20 +12,14 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            NavigationSplitView(columnVisibility: $columnVisibility) {
+            NavigationStack {
                 DrawingListView(selectedSketch: $selectedSketch)
-            } detail: {
-                if let sketch = selectedSketch {
-                    CanvasDetailView(document: sketch)
-                        .id(sketch.id)
-                        .navigationTitle(sketch.title)
-                } else {
-                    ContentUnavailableView(
-                        "Select a Sketch",
-                        systemImage: "pencil.and.scribble",
-                        description: Text("Choose a sketch from the sidebar or create a new one")
-                    )
-                }
+                    .navigationTitle("NotionSketch")
+                    .navigationDestination(item: $selectedSketch) { sketch in
+                        CanvasDetailView(document: sketch)
+                            .navigationTitle(sketch.title)
+                            .navigationBarTitleDisplayMode(.inline)
+                    }
             }
             .onOpenURL { url in
                 handleDeepLink(url)
