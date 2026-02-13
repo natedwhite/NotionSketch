@@ -5,15 +5,16 @@ NotionSketch is a powerful iPadOS application that bridges the gap between freef
 ## ✨ Features
 
 - **Expansive Canvas (PencilKit)**: Draw freely on a large digital canvas using the high-performance PencilKit engine.
+- **Synced Blocks**: Drawings are synchronized to Notion as **Synced Blocks**. This means you can copy the block from the original page and paste it into any other Notion page (e.g., a daily journal or project spec), and it will stay updated in real-time as you draw.
 - **Bi-Directional Sync**:
-  - **Drawings**: Stored directly in the Notion page body as compressed data (hidden in a toggle block), allowing for full quality restore.
-  - **OCR**: Handwritten text is recognized on-device and synced to a text property in Notion.
+  - **Full Fidelity**: Raw stroke data is stored in the **Page Body** (hidden in a code block), allowing you to restore and edit the drawing perfectly on any device.
+  - **OCR**: Handwritten text is recognized on-device and saved to a searchable "OCR" text property on the Notion page.
   - **Titles**: Rename a sketch in the app or in Notion, and changes sync both ways.
-- **Gallery View**: Visualize all your drawings in a beautiful grid layout.
+- **Automatic Library Sync**: The app automatically syncs your entire library on launch—importing new sketches created in Notion and removing locally cached sketches if the remote page is deleted.
+- **Gallery View**: Visualize all your drawings in a beautiful grid layout with live thumbnails.
 - **Connected Pages**: Link your sketches to multiple other Notion pages (e.g., Projects, Tasks) directly from the app.
 - **Deep Linking**: Open sketches directly from Notion using the `Open in App` link (`notionsketch://`).
 - **Offline First**: Fully functional offline. Changes are queued and synced automatically when back online.
-- **Spotlight Search**: Find sketches by title or text content.
 
 ## 🚀 Getting Started
 
@@ -21,11 +22,11 @@ NotionSketch is a powerful iPadOS application that bridges the gap between freef
 
 To use NotionSketch, you need a Notion database to store your sketches.
 
-1.  **Create a New Database** in Notion (or use an existing one).
-2.  Add the following properties (names must match exactly or be configured in code):
+1.  **Create a New Database** in Notion.
+2.  Add the following properties (names must match exactly):
     *   **Name**: The default title property.
-    *   **OCR** (`Text` or `Rich Text`): Stores the recognized text from your drawing.
-    *   **Open in App** (`URL`): Stores the deep link to reopen the sketch on iPad. -> I also created a fomula property called "Edit" with `link("✏️Edit", prop("Open In App"))`
+    *   **OCR** (`Text` or `Rich Text`): Stores the recognized handwritten text for searching.
+    *   **Open in App** (`URL`): Stores the deep link to reopen the sketch on iPad. You can also create a formula property called "Edit" with `link("✏️Edit", prop("Open In App"))` for a clickable button.
     *   **Connected Pages** (`Relation`): A relation property pointing to another database (e.g., your "Wiki" or "Projects" database). This allows you to link sketches to other contexts.
 3.  **Create an Internal Integration**:
     *   Go to [Notion My Integrations](https://www.notion.so/my-integrations).
@@ -34,29 +35,32 @@ To use NotionSketch, you need a Notion database to store your sketches.
     *   Copy the **Internal Integration Secret** (starts with `secret_`).
 4.  **Connect Integration to Database**:
     *   Go to your Notion database page.
-    *   Click the `...` menu (top right) -> `Connect to` -> Search for "NotionSketch" and select it.
+    *   Click the `...` menu (top right) -> `Connect to` -> Search for "NotionSketch" (your integration name) and select it.
 
 ### 2. App Installation
 
 1.  Clone this repository.
 2.  Open `NotionSketch.xcodeproj` in Xcode.
 3.  Build and run on an iPad Simulator or Device.
-    *   You can also look into something like [Sidestore](https://sidestore.io) to have it stay without having to rebuild it
+
+*Tip: For long-term use on a personal device without re-signing every 7 days, we recommend using [SideStore](https://sidestore.io).*
 
 ### 3. App Configuration
 
 1.  Launch NotionSketch.
 2.  Tap the **Settings** (gear icon) in the sidebar.
 3.  **API Token**: Paste your Internal Integration Secret.
-4.  **Database ID**: Paste the ID of your sketches database (or just paste the full URL of the database page; the app will extract the ID).
-5.  (Optional) **Short.io**: Configure Short.io API keys if you want shorter, cleaner deep links that redirect reliably on iOS.
+4.  **Database ID**: Paste the URL of your sketches database (the app will extract the ID).
+5.  (Optional) **Short.io**: Configure Short.io API keys in Settings if you want shorter, cleaner deep links that redirect reliably on iOS.
 
 ## 🛠️ Usage
 
 - **Create**: Tap `+` to start a new sketch. A corresponding page is created in Notion immediately.
-- **Draw**: Use the Apple Pencil or finger. Drawing strokes are saved locally and synced to Notion periodically (debounced) or on close.
-- **Link**: Tap the "Link" icon to connect the sketch to other Notion pages. You can search for pages in your connected database.
-- **Sync**: Status is shown in the top right. "Synced ✓" means your changes are safe in Notion.
+- **Draw**: Use the Apple Pencil. Drawing strokes are saved locally and synced to Notion automatically (debounced every 10s or on close).
+- **Live Sync**: Open the Notion page on your computer. As you draw on the iPad, watch the image update in Notion!
+- **Embed Anywhere**: Copy the **Synced Block** containing the image from the sketch page and paste it into any other Notion page. Updates to the drawing will reflect everywhere.
+- **Link**: Tap the "Link" icon to connect the sketch to other Notion pages.
+- **Sync Status**: The app syncs your entire library on every launch. While drawing, status is shown in the top right. "Synced ✓" means your changes are safe in Notion.
 
 ## ⚠️ Requirements
 

@@ -164,10 +164,11 @@ private struct Block: Encodable {
     let image: ImageBlock?
     let code: CodeBlock?
     let toggle: ToggleBlock?
+    let synced_block: SyncedBlock?
     let children: [Block]?
 
     enum CodingKeys: String, CodingKey {
-        case object, type, paragraph, image, code, toggle, children
+        case object, type, paragraph, image, code, toggle, synced_block, children
     }
 
     static func paragraphBlock(text: String) -> Block {
@@ -183,6 +184,7 @@ private struct Block: Encodable {
             image: nil,
             code: nil,
             toggle: nil,
+            synced_block: nil,
             children: nil
         )
     }
@@ -197,6 +199,7 @@ private struct Block: Encodable {
             ),
             code: nil,
             toggle: nil,
+            synced_block: nil,
             children: nil
         )
     }
@@ -212,6 +215,7 @@ private struct Block: Encodable {
                 language: "json"
             ),
             toggle: nil,
+            synced_block: nil,
             children: nil
         )
     }
@@ -249,9 +253,9 @@ private struct Annotations: Codable {
     let color: String
     
     // Helper init for creating simple annotations
-    init(italic: Bool = false, color: String = "default") {
+    init(italic: Bool = false, bold: Bool = false, color: String = "default") {
         self.italic = italic
-        self.bold = false
+        self.bold = bold
         self.strikethrough = false
         self.underline = false
         self.code = false
@@ -283,6 +287,27 @@ private struct CodeBlock: Encodable {
 
 private struct FileUploadRef: Encodable {
     let id: String
+}
+
+private struct SyncedBlock: Encodable {
+    let synced_from: SyncedFrom?
+
+    enum CodingKeys: String, CodingKey {
+        case synced_from
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let syncedFrom = synced_from {
+            try container.encode(syncedFrom, forKey: .synced_from)
+        } else {
+            try container.encodeNil(forKey: .synced_from)
+        }
+    }
+}
+
+private struct SyncedFrom: Encodable {
+    let block_id: String
 }
 
 // MARK: - NotionService Actor
@@ -666,6 +691,7 @@ actor NotionService {
                     richText: richTextObjects, language: "json"
                 ), 
                 toggle: nil,
+                synced_block: nil,
                 children: nil
             )
             codeBlocks.append(block)
@@ -680,6 +706,7 @@ actor NotionService {
                 ],
                 color: "gray"
             ),
+            synced_block: nil,
             children: nil // Do not send children in first request
         )
         
@@ -772,37 +799,170 @@ actor NotionService {
         }
     }
 
-    // MARK: - Append Blocks to Page
+    // MARK: - Update Sketch Preview (Persistent)
 
-    /// Appends paragraph + image blocks to the specified Notion page.
-    ///
-    /// - Parameters:
-    ///   - pageID: The Notion page ID to append blocks to.
-    ///   - fileUploadID: The Notion File Upload ID.
-    ///   - recognizedText: OCR-extracted text (may be empty).
-    func appendToNotionPage(pageID: String, fileUploadID: String, recognizedText: String) async throws {
-        let urlString = "\(NotionConfig.baseURL)/blocks/\(pageID)/children"
+    /// Updates the "Sketch Preview" toggle block with the new image.
+    /// Finds existing block -> Clears children -> Appends new image.
+    /// Does NOT delete other page content.
+    func updateSketchPreview(pageID: String, fileUploadID: String, recognizedText: String) async throws {
+        // 1. Fetch children of the page to find our block
+        let pageBlocks = try await fetchAllChildren(blockID: pageID)
+        
+        var previewBlockID: String? = nil
+        
+        for block in pageBlocks {
+            if block.type == "toggle",
+               let toggle = block.toggle,
+               toggle.rich_text.first?.text.content == "Sketch Preview" {
+                previewBlockID = block.id
+                break
+            }
+        }
+        
+        if let id = previewBlockID {
+            // 2a. Block exists: Clear its children (the old image)
+            let children = try await fetchAllChildren(blockID: id)
+            for child in children {
+                 guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(child.id)") else { continue }
+                 let request = try await authorizedRequest(url: url, method: "DELETE")
+                 _ = try await safeRequest(request, context: "deletePreviewChild")
+            }
+        } else {
+            // 2b. Block doesn't exist: Create it
+            let toggleBlock = Block(
+                type: "toggle", paragraph: nil, image: nil, code: nil,
+                toggle: ToggleBlock(
+                    rich_text: [
+                        RichText(type: "text", text: TextContent(content: "Sketch Preview", link: nil), annotations: Annotations(bold: true))
+                    ],
+                    color: "default"
+                ),
+                synced_block: nil,
+                children: nil
+            )
+             
+            // Append to page
+             let urlString = "\(NotionConfig.baseURL)/blocks/\(pageID)/children"
+             guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+             
+             var request = try await authorizedRequest(url: url, method: "PATCH")
+             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+             request.httpBody = try JSONEncoder().encode(AppendChildrenRequest(children: [toggleBlock]))
+             
+             let (data, response) = try await safeRequest(request, context: "createPreviewBlock")
+             let validatedData = try validate(data, response)
+             let decoded = try JSONDecoder().decode(BlockChildrenResponse.self, from: validatedData)
+             previewBlockID = decoded.results.first?.id
+        }
+        
+        guard let targetID = previewBlockID else { return }
 
-        guard let url = URL(string: urlString) else {
-            throw NotionServiceError.invalidURL
+        // 3. Append Image to the Toggle Block
+        let urlString = "\(NotionConfig.baseURL)/blocks/\(targetID)/children"
+        guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+        
+        var children: [Block] = []
+        children.append(Block.imageBlock(fileUploadID: fileUploadID))
+        
+        if !recognizedText.isEmpty {
+             children.append(Block.paragraphBlock(text: "OCR: " + recognizedText))
         }
 
-        var children: [Block] = []
-
-
-
-        children.append(Block.imageBlock(fileUploadID: fileUploadID))
-
         let requestBody = AppendChildrenRequest(children: children)
-
         var request = try await authorizedRequest(url: url, method: "PATCH")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let encoder = JSONEncoder()
-        request.httpBody = try encoder.encode(requestBody)
-
-        let (data, response) = try await safeRequest(request, context: "appendBlocks")
+        request.httpBody = try JSONEncoder().encode(requestBody)
+        
+        let (data, response) = try await safeRequest(request, context: "appendImageToPreview")
         _ = try validate(data, response)
+    }
+
+    // MARK: - Update Synced Image (Synced Block)
+
+    /// Updates the image inside a Synced Block.
+    /// If `syncedBlockID` is provided and valid, it updates that block.
+    /// Otherwise, it creates a new Synced Block and returns its ID.
+    func updateSyncedImage(
+        pageID: String,
+        syncedBlockID: String?,
+        fileUploadID: String,
+        recognizedText: String
+    ) async throws -> String {
+        
+        var targetBlockID = syncedBlockID
+        var isNewBlock = false
+        
+        // 1. Validate Existing Synced Block
+        if let existingID = syncedBlockID {
+            do {
+                _ = try await fetchAllChildren(blockID: existingID)
+                SyncLogger.log("found existing synced block: \(existingID)")
+            } catch {
+                SyncLogger.log("⚠️ Synced Block \(existingID) not found or inaccessible. creating new one.")
+                targetBlockID = nil
+            }
+        }
+        
+        // 2. Create New Synced Block (Empty) if needed
+        if targetBlockID == nil {
+            // Create pure empty synced block wrapper
+            // We do NOT send children here to avoid "children not present" validation error
+            let createBlock = Block(
+                type: "synced_block",
+                paragraph: nil, image: nil, code: nil, toggle: nil,
+                synced_block: SyncedBlock(synced_from: nil),
+                children: nil
+            )
+            
+            let urlString = "\(NotionConfig.baseURL)/blocks/\(pageID)/children"
+            guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+            
+            var request = try await authorizedRequest(url: url, method: "PATCH")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(AppendChildrenRequest(children: [createBlock]))
+            
+            let (data, response) = try await safeRequest(request, context: "createSyncedBlock")
+            let validatedData = try validate(data, response)
+            let decoded = try JSONDecoder().decode(BlockChildrenResponse.self, from: validatedData)
+            
+            if let newID = decoded.results.first?.id {
+                targetBlockID = newID
+                isNewBlock = true
+            } else {
+                 throw NotionServiceError.appendFailed("Created Synced Block but got no ID.")
+            }
+        }
+        
+        guard let finalID = targetBlockID else { return "" }
+        
+        // 3. Clear Existing Children (Update Mode Only)
+        if !isNewBlock {
+            let children = try await fetchAllChildren(blockID: finalID)
+            for child in children {
+                 guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(child.id)") else { continue }
+                 let request = try await authorizedRequest(url: url, method: "DELETE")
+                 _ = try await safeRequest(request, context: "deleteSyncedBlockChild")
+            }
+        }
+        
+        // 4. Append Content (Image + OCR)
+        // We do this for both New and Existing blocks to ensure content is there
+        let urlString = "\(NotionConfig.baseURL)/blocks/\(finalID)/children"
+        guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+        
+        var newChildren: [Block] = []
+        newChildren.append(Block.imageBlock(fileUploadID: fileUploadID))
+        // Removed OCR text block as per request
+        
+        let requestBody = AppendChildrenRequest(children: newChildren)
+        var request = try await authorizedRequest(url: url, method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(requestBody)
+        
+        let (data, response) = try await safeRequest(request, context: "appendImageToSyncedBlock")
+        _ = try validate(data, response)
+        
+        return finalID
     }
 
     // MARK: - Update Page Properties
@@ -1414,6 +1574,43 @@ actor NotionService {
         }
         return foundPages
     }
+    // MARK: - Legacy Cleanup
+
+    /// Removes the old "Sketch Preview" toggle block and any standalone image blocks if they exist.
+    func deleteLegacyPreview(pageID: String) async throws {
+        // 1. Fetch children of the page
+        let pageBlocks = try await fetchAllChildren(blockID: pageID)
+        
+        var blocksToDelete: [String] = []
+        
+        // 2. Find legacy blocks
+        for block in pageBlocks {
+            // A. "Sketch Preview" Toggle Block
+            if block.type == "toggle",
+               let toggle = block.toggle,
+               toggle.rich_text.first?.text.content == "Sketch Preview" {
+                blocksToDelete.append(block.id)
+            }
+            // B. Standalone Image Blocks (Legacy before Toggle/Synced)
+            // We assume ANY top-level image on this page is a legacy sketch preview 
+            // because we now put them inside synced blocks.
+            else if block.type == "image" {
+                blocksToDelete.append(block.id)
+            }
+        }
+        
+        // 3. Delete them
+        for blockID in blocksToDelete {
+            guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(blockID)") else { continue }
+            let request = try await authorizedRequest(url: url, method: "DELETE")
+            let (data, response) = try await safeRequest(request, context: "deleteLegacyPreview")
+            _ = try validate(data, response)
+        }
+        
+        if !blocksToDelete.isEmpty {
+            SyncLogger.log("🧹 Removed \(blocksToDelete.count) legacy blocks (toggles/images)")
+        }
+    }
 }
 
 
@@ -1438,7 +1635,11 @@ extension NotionService {
             let nsError = error as NSError
             // Log specific networking errors
             if nsError.domain == NSURLErrorDomain {
-                SyncLogger.log("❌ Network Error in \(context): \(nsError.localizedDescription) (Code: \(nsError.code))")
+                // Suppress verbose logging for cancelled requests (normal debounce flow)
+                if nsError.code != NSURLErrorCancelled {
+                     SyncLogger.log("❌ Network Error in \(context): \(nsError.localizedDescription) (Code: \(nsError.code))")
+                }
+                
                 if nsError.code == NSURLErrorCannotParseResponse {
                      SyncLogger.log("⚠️ This usually means the server returned an empty body or invalid headers for the request type.")
                 }

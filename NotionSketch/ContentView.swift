@@ -25,6 +25,11 @@ struct ContentView: View {
                 handleDeepLink(url)
             }
             .onAppear {
+                // Start background sync on launch
+                Task {
+                    await NotionSyncManager.shared.syncLibrary(context: modelContext)
+                }
+                
                 // Give SwiftData and UI a moment to initialize
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
                     withAnimation(.easeOut(duration: 0.5)) {

@@ -13,6 +13,7 @@ final class SketchDocument {
     var title: String
     var drawingData: Data
     var notionPageID: String?
+    var syncedBlockID: String?
     var createdAt: Date
     var lastSyncedAt: Date?
     var thumbnailData: Data?
@@ -22,12 +23,14 @@ final class SketchDocument {
     init(
         title: String = "Untitled Sketch",
         drawingData: Data = Data(),
-        notionPageID: String? = nil
+        notionPageID: String? = nil,
+        syncedBlockID: String? = nil
     ) {
         self.id = UUID()
         self.title = title
         self.drawingData = drawingData
         self.notionPageID = notionPageID
+        self.syncedBlockID = syncedBlockID
         self.createdAt = Date()
         self.lastSyncedAt = nil
         self.thumbnailData = nil
