@@ -25,7 +25,7 @@ To use NotionSketch, you need a Notion database to store your sketches.
 2.  Add the following properties (names must match exactly or be configured in code):
     *   **Name**: The default title property.
     *   **OCR** (`Text` or `Rich Text`): Stores the recognized text from your drawing.
-    *   **Open in App** (`URL`): Stores the deep link to reopen the sketch on iPad.
+    *   **Open in App** (`URL`): Stores the deep link to reopen the sketch on iPad. -> I also created a fomula property called "Edit" with `link("✏️Edit", prop("Open In App"))`
     *   **Connected Pages** (`Relation`): A relation property pointing to another database (e.g., your "Wiki" or "Projects" database). This allows you to link sketches to other contexts.
 3.  **Create an Internal Integration**:
     *   Go to [Notion My Integrations](https://www.notion.so/my-integrations).
@@ -41,8 +41,7 @@ To use NotionSketch, you need a Notion database to store your sketches.
 1.  Clone this repository.
 2.  Open `NotionSketch.xcodeproj` in Xcode.
 3.  Build and run on an iPad Simulator or Device.
-
-You can also look into something like [Sidestore](https://sidestore.io) to have it stay without having to rebuild it
+    *   You can also look into something like [Sidestore](https://sidestore.io) to have it stay without having to rebuild it
 
 ### 3. App Configuration
 
