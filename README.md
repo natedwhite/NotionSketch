@@ -4,15 +4,16 @@ NotionSketch is a powerful iPadOS application that bridges the gap between freef
 
 ## ✨ Features
 
-- **Expansive Canvas**: Draw freely on a large digital canvas using the high-performance PencilKit engine.
+- **Expansive Canvas (PencilKit)**: Draw freely on a large digital canvas using the high-performance PencilKit engine.
 - **Bi-Directional Sync**:
-  - **Drawings**: Automatically uploaded as images to Notion page blocks.
+  - **Drawings**: Stored directly in the Notion page body as compressed data (hidden in a toggle block), allowing for full quality restore.
   - **OCR**: Handwritten text is recognized on-device and synced to a text property in Notion.
   - **Titles**: Rename a sketch in the app or in Notion, and changes sync both ways.
-  - **Connected Pages**: Link your sketches to other Notion pages (e.g., Projects, Tasks) directly from the app.
+- **Gallery View**: Visualize all your drawings in a beautiful grid layout.
+- **Connected Pages**: Link your sketches to multiple other Notion pages (e.g., Projects, Tasks) directly from the app.
 - **Deep Linking**: Open sketches directly from Notion using the `Open in App` link (`notionsketch://`).
-- **Offline First**: fully functional offline. Changes are queued and synced automatically when back online.
-- **Spotlight Search**: Find sketches by title, date, or connected page names.
+- **Offline First**: Fully functional offline. Changes are queued and synced automatically when back online.
+- **Spotlight Search**: Find sketches by title or text content.
 
 ## 🚀 Getting Started
 
@@ -61,7 +62,7 @@ You can also look into something like [Sidestore](https://sidestore.io) to have 
 ## ⚠️ Requirements
 
 - iOS/iPadOS 17.0+
-- Xcode 15.0+
+- Xcode 16.0+ (for Swift 6 / iOS 18 features if used)
 - A Notion Account
 
 ## 📄 License
