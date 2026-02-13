@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import PencilKit
+import UIKit
 
 /// Persistent model representing a single sketch drawing.
 /// Each document stores its PencilKit data locally and tracks
@@ -43,8 +44,39 @@ final class SketchDocument {
             return (try? PKDrawing(data: drawingData)) ?? PKDrawing()
         }
         set {
-            drawingData = (try? newValue.dataRepresentation()) ?? Data()
+            drawingData = newValue.dataRepresentation()
         }
+    }
+    
+    // MARK: - Thumbnail
+    
+    /// Re-generates the thumbnail data from the current drawing.
+    /// This should be called on the Main Actor because PKDrawing image generation uses hidden UI logic.
+    @MainActor
+    func updateThumbnail() {
+        let drawing = self.drawing
+        let bounds = drawing.bounds
+        
+        // If empty, clear thumbnail
+        if bounds.isEmpty || bounds.width < 1 || bounds.height < 1 {
+            self.thumbnailData = nil
+            return
+        }
+        
+        // Add some padding
+        let padding: CGFloat = 20
+        let imageRect = CGRect(
+            x: bounds.origin.x - padding,
+            y: bounds.origin.y - padding,
+            width: bounds.width + padding * 2,
+            height: bounds.height + padding * 2
+        )
+        
+        // Generate Image (Scale 1.0 for thumbnail is usually fine)
+        let image = drawing.image(from: imageRect, scale: 1.0)
+        
+        // Convert to PNG data
+        self.thumbnailData = image.pngData()
     }
 }
 

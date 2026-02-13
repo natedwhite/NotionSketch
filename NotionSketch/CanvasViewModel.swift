@@ -49,8 +49,12 @@ final class CanvasViewModel {
 
     // MARK: - Published State
 
+    // MARK: - Published State
+    
     /// Current sync state — drives the UI status indicator.
-    var syncState: SyncState = .idle
+    var syncState: SyncState {
+        NotionSyncManager.shared.syncStates[document.id.uuidString] ?? .idle
+    }
 
     /// The most recently recognized text from OCR.
     var lastRecognizedText: String = ""
@@ -65,9 +69,6 @@ final class CanvasViewModel {
     
     private var targetDatabaseID: String? = nil
     private let notionService = NotionService()
-    private var debounceTask: Task<Void, Never>?
-    private let debounceDuration: Duration = .seconds(3)
-    private var successDismissTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -79,63 +80,38 @@ final class CanvasViewModel {
     // MARK: - Drawing Changed (Debounce Entry Point)
 
     /// Called every time `PKCanvasView` reports a drawing change.
-    /// Saves locally immediately, then debounces the Notion sync.
+    /// Saves locally immediately, then requests a background sync via Manager.
     func drawingDidChange(_ drawing: PKDrawing) {
         currentDrawing = drawing
 
         // Persist to SwiftData immediately (local save is cheap)
         document.drawing = drawing
         updateThumbnail(from: drawing)
-
-        // Cancel any pending sync debounce
-        debounceTask?.cancel()
-
+        
         // Don't sync if the canvas is empty
-        guard !drawing.strokes.isEmpty else {
-            syncState = .idle
-            return
-        }
+        guard !drawing.strokes.isEmpty else { return }
 
         // Don't sync if not configured
         guard SettingsManager.shared.isConfigured else {
-            syncState = .error("Open Settings to add your Notion API token & database")
+            // Error state handled elsewhere or show alert?
+            // syncState is computed now. We can't set it easily.
+            // NotionSyncManager will error if called.
             return
         }
 
-        debounceTask = Task { [weak self] in
-            guard let self else { return }
-
-            do {
-                try await Task.sleep(for: self.debounceDuration)
-                await self.performSync(drawing: drawing)
-            } catch {
-                // Task was canceled (user drew another stroke) — do nothing
-            }
-        }
+        // Request background sync (debounced 10s)
+        NotionSyncManager.shared.requestSync(document: document)
     }
 
     // MARK: - Force Sync
 
     /// Immediately syncs the current drawing to Notion, bypassing the debounce timer.
     func forceSyncNow() {
-        debounceTask?.cancel()
-
-        guard !currentDrawing.strokes.isEmpty else {
-            syncState = .error("Nothing to sync — canvas is empty")
-            SyncLogger.log("Force sync aborted: canvas is empty")
-            return
-        }
-
-        guard SettingsManager.shared.isConfigured else {
-            syncState = .error("Open Settings to add your Notion API token & database")
-            SyncLogger.log("Force sync aborted: not configured")
-            return
-        }
+        guard !currentDrawing.strokes.isEmpty else { return }
+        guard SettingsManager.shared.isConfigured else { return }
 
         SyncLogger.log("Force sync triggered")
-        Task {
-            await performSync(drawing: currentDrawing)
-        }
+        NotionSyncManager.shared.forceSync(document: document)
     }
     
     // MARK: - Remote Sync (Title & Properties)
@@ -154,7 +130,7 @@ final class CanvasViewModel {
         }
         
         do {
-            if let (title, _, connectedIDs) = try await notionService.fetchPageDetails(pageID: pageID) {
+            if let (title, _, connectedIDs, _) = try await notionService.fetchPageDetails(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")
@@ -177,106 +153,9 @@ final class CanvasViewModel {
 
     // MARK: - Sync Pipeline
     
-    /// Full sync pipeline: OCR → Upload Image → Create/Update Notion Page.
-    private func performSync(drawing: PKDrawing) async {
-        syncState = .syncing
-        var step = "init"
-        SyncLogger.log("--- Sync started ---")
+    // Old performSync logic removed (moved to NotionSyncManager)
 
-        do {
-            // 1. Convert drawing to image
-            step = "convertImage"
-            let image = drawingToImage(drawing)
-            SyncLogger.log("✅ Step 1: Drawing converted to image (\(image.size))")
 
-            // 2. Run OCR
-            step = "ocr"
-            let recognizedText = await recognizeText(in: image)
-            lastRecognizedText = recognizedText
-            SyncLogger.log("✅ Step 2: OCR complete — \"\(recognizedText.prefix(80))\"")
-
-            // 3. Upload image via Notion File Upload API
-            step = "uploadImage"
-            SyncLogger.log("Step 3: Uploading image...")
-            let fileUploadID = try await notionService.uploadDrawingImage(image)
-            SyncLogger.log("✅ Step 3: Image uploaded — ID: \(fileUploadID)")
-
-            // 4. Ensure we have a Notion page
-            let pageID: String
-            let appLink = "notionsketch://open?id=\(document.id.uuidString)"
-
-            if let existingPageID = document.notionPageID {
-                step = "updatePage"
-                SyncLogger.log("Step 4: Updating page properties & clearing blocks...")
-                
-                // Update properties (Title, OCR, Link)
-                try await notionService.updatePageProperties(
-                    pageID: existingPageID,
-                    title: document.title,
-                    ocrText: recognizedText,
-                    appLink: appLink
-                )
-                
-                pageID = existingPageID
-                try await notionService.clearPageBlocks(pageID: pageID)
-                SyncLogger.log("✅ Step 4: Properties updated & blocks cleared")
-            } else {
-                step = "createPage"
-                SyncLogger.log("Step 4: Creating new page in database")
-                pageID = try await notionService.createPageInDatabase(
-                    title: document.title,
-                    ocrText: recognizedText,
-                    appLink: appLink
-                )
-                document.notionPageID = pageID
-                SyncLogger.log("✅ Step 4: Page created — ID: \(pageID)")
-            }
-
-            // 5. Append blocks to the page
-            step = "appendBlocks"
-            SyncLogger.log("Step 5: Appending blocks...")
-            try await notionService.appendToNotionPage(
-                pageID: pageID,
-                fileUploadID: fileUploadID,
-                recognizedText: recognizedText
-            )
-            SyncLogger.log("✅ Step 5: Blocks appended")
-
-            // 6. Success!
-            // Sync connected pages property from Notion to ensure we are up to date
-            await fetchRemoteProperties()
-            
-            document.lastSyncedAt = Date()
-            syncState = .success
-            scheduleSuccessDismiss()
-            SyncLogger.log("✅ Sync complete!")
-
-        } catch {
-            SyncLogger.log("❌ FAILED at step: \(step)")
-            SyncLogger.log("❌ Error type: \(type(of: error))")
-            SyncLogger.log("❌ Error: \(error)")
-            SyncLogger.log("❌ Localized: \(error.localizedDescription)")
-            if !Task.isCancelled {
-                syncState = .error("Step: \(step) — \(error.localizedDescription)")
-            }
-        }
-    }
-
-    // MARK: - Drawing → UIImage
-
-    private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
-        let bounds = drawing.bounds
-        let padding: CGFloat = 20
-
-        let imageRect = CGRect(
-            x: bounds.origin.x - padding,
-            y: bounds.origin.y - padding,
-            width: bounds.width + padding * 2,
-            height: bounds.height + padding * 2
-        )
-
-        return drawing.image(from: imageRect, scale: 2.0)
-    }
 
     // MARK: - Thumbnail Generation
 
@@ -304,40 +183,7 @@ final class CanvasViewModel {
         document.thumbnailData = thumbnail.pngData()
     }
 
-    // MARK: - OCR via Vision Framework
 
-    private func recognizeText(in image: UIImage) async -> String {
-        guard let cgImage = image.cgImage else { return "" }
-
-        return await withCheckedContinuation { continuation in
-            let request = VNRecognizeTextRequest { request, error in
-                guard error == nil,
-                      let observations = request.results as? [VNRecognizedTextObservation]
-                else {
-                    continuation.resume(returning: "")
-                    return
-                }
-
-                let recognizedStrings = observations.compactMap { observation in
-                    observation.topCandidates(1).first?.string
-                }
-
-                let combined = recognizedStrings.joined(separator: " ")
-                continuation.resume(returning: combined)
-            }
-
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-
-            do {
-                try handler.perform([request])
-            } catch {
-                continuation.resume(returning: "")
-            }
-        }
-    }
 
     // MARK: - Connected Pages Logic
     
@@ -358,24 +204,38 @@ final class CanvasViewModel {
     func searchPages(query: String) async -> [ConnectedPageItem] {
         guard !query.isEmpty else { return [] }
         
-        // If we know the target database for the relation, filter by it!
-        if let dbID = targetDatabaseID {
-            do {
-                let results = try await notionService.queryDatabase(databaseID: dbID, query: query)
-                // Filter out existing connected pages? App will do this, or here?
-                // For now, raw results.
-                return results.map { ConnectedPageItem(id: $0.id, title: $0.title, icon: $0.icon) }
-            } catch {
-                SyncLogger.log("⚠️ Targeted search failed: \(dbID) - \(error.localizedDescription) — Returning empty results (strict filter)")
-                return []
-            }
+        // Helper to convert results to view models
+        func mapResults(_ results: [(id: String, title: String, icon: String?)]) -> [ConnectedPageItem] {
+            results
+                .filter { $0.id.replacingOccurrences(of: "-", with: "") != document.notionPageID?.replacingOccurrences(of: "-", with: "") } // Exclude self
+                .map { ConnectedPageItem(id: $0.id, title: $0.title, icon: $0.icon) }
         }
-        
+
+        // 1. Check for Manual override in Settings
+        let manualID = SettingsManager.shared.connectedPagesDatabaseID
+        if !manualID.isEmpty {
+            targetDatabaseID = manualID
+        }
+
+        // 2. Lazy load target DB if not yet cached/configured
+        if targetDatabaseID == nil {
+             targetDatabaseID = try? await notionService.fetchConnectedPagesTargetDatabaseID()
+        }
+
+        // 3. Strict Query
+        // We require a target database ID (manual or auto-detected).
+        guard let dbID = targetDatabaseID else {
+            // If we can't find a DB, we return empty (Strict mode).
+            // User can now configure it manually if auto-detection fails.
+            SyncLogger.log("⚠️ Cannot search: Target database not resolved. Please configure 'Connected Pages Database' in Settings.")
+            return []
+        }
+
         do {
-            let results = try await notionService.searchNotionPages(query: query)
-            return results.map { ConnectedPageItem(id: $0.id, title: $0.title, icon: $0.icon) }
+            let results = try await notionService.queryDatabase(databaseID: dbID, query: query)
+            return mapResults(results)
         } catch {
-            SyncLogger.log("⚠️ Search failed: \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Targeted search failed: \(dbID) - \(error.localizedDescription)")
             return []
         }
     }
@@ -445,19 +305,5 @@ final class CanvasViewModel {
             SyncLogger.log("⚠️ Failed to sync connected pages: \(error.localizedDescription)")
         }
     }
-    // MARK: - Auto-dismiss Success State
-
-    private func scheduleSuccessDismiss() {
-        successDismissTask?.cancel()
-        successDismissTask = Task {
-            do {
-                try await Task.sleep(for: .seconds(4))
-                if syncState == .success {
-                    syncState = .idle
-                }
-            } catch {
-                // Canceled — no-op
-            }
-        }
-    }
+    // scheduleSuccessDismiss removed (managed by NotionSyncManager)
 }

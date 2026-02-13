@@ -1,10 +1,13 @@
 import Foundation
 import UIKit
+import PencilKit
+import Vision
+import Observation
 
 // MARK: - Configuration
 
 enum NotionConfig {
-    static let apiVersion = "2025-09-03"
+    static let apiVersion = "2022-06-28"
     static let baseURL = "https://api.notion.com/v1"
 }
 
@@ -101,6 +104,7 @@ private struct PageProperty: Decodable {
     let type: String
     let title: [RichText]?
     let relation: [RelationItem]?
+    let rich_text: [RichText]?
 }
 
 // MARK: - Block List Response (for clearing page)
@@ -119,9 +123,35 @@ private struct BlockChildrenResponse: Decodable {
 
 private struct BlockResult: Decodable {
     let id: String
+    let type: String
+    let code: CodeBlockResult?
+    let toggle: ToggleBlockResult?
+    let has_children: Bool?
+}
+
+private struct CodeBlockResult: Decodable {
+    let caption: [RichText]
+    let richText: [RichText]
+    let language: String
+    
+    enum CodingKeys: String, CodingKey {
+        case caption
+        case richText = "rich_text"
+        case language
+    }
+}
+
+
+private struct ToggleBlockResult: Decodable {
+    let rich_text: [RichText]
 }
 
 // MARK: - Notion Block Types (Encodable)
+
+private struct ToggleBlock: Encodable {
+    let rich_text: [RichText]
+    let color: String
+}
 
 private struct AppendChildrenRequest: Encodable {
     let children: [Block]
@@ -132,9 +162,12 @@ private struct Block: Encodable {
     let type: String
     let paragraph: ParagraphBlock?
     let image: ImageBlock?
+    let code: CodeBlock?
+    let toggle: ToggleBlock?
+    let children: [Block]?
 
     enum CodingKeys: String, CodingKey {
-        case object, type, paragraph, image
+        case object, type, paragraph, image, code, toggle, children
     }
 
     static func paragraphBlock(text: String) -> Block {
@@ -147,7 +180,10 @@ private struct Block: Encodable {
                     annotations: Annotations(italic: true)
                 )
             ]),
-            image: nil
+            image: nil,
+            code: nil,
+            toggle: nil,
+            children: nil
         )
     }
 
@@ -158,7 +194,25 @@ private struct Block: Encodable {
             image: ImageBlock(
                 type: "file_upload",
                 fileUpload: FileUploadRef(id: fileUploadID)
-            )
+            ),
+            code: nil,
+            toggle: nil,
+            children: nil
+        )
+    }
+    
+    static func codeBlock(text: String, caption: String = "NotionSketch Data") -> Block {
+        Block(
+            type: "code",
+            paragraph: nil,
+            image: nil,
+            code: CodeBlock(
+                caption: [RichText(type: "text", text: TextContent(content: caption, link: nil), annotations: nil)],
+                richText: [RichText(type: "text", text: TextContent(content: text, link: nil), annotations: nil)],
+                language: "json"
+            ),
+            toggle: nil,
+            children: nil
         )
     }
 }
@@ -195,13 +249,13 @@ private struct Annotations: Codable {
     let color: String
     
     // Helper init for creating simple annotations
-    init(italic: Bool = false) {
+    init(italic: Bool = false, color: String = "default") {
         self.italic = italic
         self.bold = false
         self.strikethrough = false
         self.underline = false
         self.code = false
-        self.color = "default"
+        self.color = color
     }
 }
 
@@ -212,6 +266,18 @@ private struct ImageBlock: Encodable {
     enum CodingKeys: String, CodingKey {
         case type
         case fileUpload = "file_upload"
+    }
+}
+
+private struct CodeBlock: Encodable {
+    let caption: [RichText]
+    let richText: [RichText]
+    let language: String
+    
+    enum CodingKeys: String, CodingKey {
+        case caption
+        case richText = "rich_text"
+        case language
     }
 }
 
@@ -285,7 +351,7 @@ actor NotionService {
         ]
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "createFileUpload")
         let validatedData = try validate(data, response)
 
         let decoded: FileUploadResponse
@@ -331,7 +397,7 @@ actor NotionService {
 
         request.httpBody = body
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "sendFileUpload")
         let validatedData = try validate(data, response)
 
         let decoded: SendFileUploadResponse
@@ -371,7 +437,7 @@ actor NotionService {
     ///
     /// - Parameter title: The page title (maps to the database's title property).
     /// - Returns: The newly created Notion page ID.
-    func createPageInDatabase(title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
+    func createPageInDatabase(title: String, ocrText: String? = nil, appLink: String? = nil, drawingEncoding: String? = nil) async throws -> String {
         let databaseID = await getDatabaseID()
         guard !databaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NotionServiceError.notConfigured
@@ -400,6 +466,14 @@ actor NotionService {
              properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
         }
         
+        if let drawingEncoding {
+            let chunks = chunkString(drawingEncoding, size: 2000)
+            let richTextObjects = chunks.map { chunk in
+                ["text": ["content": chunk]]
+            }
+            properties["Drawing Encode"] = [ "rich_text": richTextObjects ]
+        }
+        
         var finalAppLink = appLink
         if let link = appLink, link.hasPrefix("notionsketch") {
             if let short = await shortenURL(link) {
@@ -418,7 +492,7 @@ actor NotionService {
 
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "createPage")
         let validatedData = try validate(data, response)
 
         let decoded: CreatePageResponse
@@ -442,7 +516,7 @@ actor NotionService {
         }
 
         let request = try await authorizedRequest(url: url, method: "GET")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "getDatabaseTitle")
         let validatedData = try validate(data, response)
 
         let decoded: DatabaseResponse
@@ -455,6 +529,7 @@ actor NotionService {
         }
 
         // Find the property whose type is "title"
+        // Find the property whose type is "title"
         for (name, property) in decoded.properties ?? [:] {
             if property.type == "title" {
                 return name
@@ -463,6 +538,180 @@ actor NotionService {
 
         // Fallback — shouldn't happen since every database has a title property
         return "Name"
+    }
+    // MARK: - Page Content (Using Blocks)
+    
+    /// Fetches drawing data from the page.
+    /// Priority 1: Checks for a Toggle Block named "Image Data" and reads its children.
+    /// Priority 2: Checks for top-level Code Blocks named "NotionSketch Data" (Legacy).
+    func fetchPageBlocks(pageID: String) async throws -> String? {
+        let pageBlocks = try await fetchAllChildren(blockID: pageID)
+        
+        // 1. Check for "Image Data" Toggle Block
+        if let toggleBlock = pageBlocks.first(where: { block in
+            guard block.type == "toggle", let toggle = block.toggle else { return false }
+            // Check title (rich_text)
+            let title = toggle.rich_text.compactMap { $0.text.content }.joined()
+            return title == "Image Data"
+        }) {
+            // Found toggle, fetch its children
+            let childBlocks = try await fetchAllChildren(blockID: toggleBlock.id)
+            if let content = extractCodeContent(from: childBlocks) {
+                return content
+            }
+        }
+        
+        // 2. Fallback: Check top-level blocks
+        return extractCodeContent(from: pageBlocks)
+    }
+    
+    // MARK: - internal helpers
+    
+    private func fetchAllChildren(blockID: String) async throws -> [BlockResult] {
+        var allBlocks: [BlockResult] = []
+        var cursor: String? = nil
+        
+        repeat {
+            var urlString = "\(NotionConfig.baseURL)/blocks/\(blockID)/children?page_size=100"
+            if let cursor { urlString += "&start_cursor=\(cursor)" }
+            
+            guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+            
+            let request = try await authorizedRequest(url: url, method: "GET")
+            let (data, response) = try await safeRequest(request, context: "fetchAllChildren")
+            let validatedData = try validate(data, response)
+            
+            let decoded = try JSONDecoder().decode(BlockChildrenResponse.self, from: validatedData)
+            allBlocks.append(contentsOf: decoded.results)
+            
+            cursor = decoded.hasMore ? decoded.nextCursor : nil
+        } while cursor != nil
+        
+        return allBlocks
+    }
+    
+    private func extractCodeContent(from blocks: [BlockResult]) -> String? {
+        var accumulatedContent = ""
+        var foundAny = false
+        
+        for block in blocks {
+            if block.type == "code",
+               let code = block.code,
+               let caption = code.caption.first?.text.content,
+               caption == "NotionSketch Data" {
+                
+                let blockContent = code.richText.map { $0.text.content }.joined()
+                accumulatedContent += blockContent
+                foundAny = true
+            }
+        }
+        return foundAny ? accumulatedContent : nil
+    }
+    
+    /// Updates the page content by storing the drawing data inside a Toggle Block named "Image Data".
+    /// Finds and deletes any existing data blocks (Legacy or Toggle) before appending the new one.
+    func updatePageContent(pageID: String, drawingString: String) async throws {
+        // 1. Find existing data blocks using helper
+        let pageBlocks = try await fetchAllChildren(blockID: pageID)
+        var blocksToDelete: [String] = []
+
+        for block in pageBlocks {
+            // Check for "Image Data" Toggle
+            if block.type == "toggle",
+               let toggle = block.toggle,
+               toggle.rich_text.compactMap({ $0.text.content }).joined() == "Image Data" {
+                blocksToDelete.append(block.id)
+            }
+            // Check for Legacy Code Blocks (cleanup)
+            else if block.type == "code",
+                    let code = block.code,
+                    let caption = code.caption.first?.text.content,
+                    caption == "NotionSketch Data" {
+                 blocksToDelete.append(block.id)
+            }
+        }
+        
+        // 2. Delete existing blocks
+        for blockID in blocksToDelete {
+            guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(blockID)") else { continue }
+            let request = try await authorizedRequest(url: url, method: "DELETE")
+            _ = try await safeRequest(request, context: "deleteDataBlock")
+        }
+        
+        // 3. Prepare New Code Blocks (Chunked)
+        // Notion Code blocks limited to 100 items in rich_text array.
+        let allChunks = chunkString(drawingString, size: 2000)
+        let blockGroups = stride(from: 0, to: allChunks.count, by: 100).map {
+            Array(allChunks[$0..<min($0 + 100, allChunks.count)])
+        }
+        
+        var codeBlocks: [Block] = []
+        for group in blockGroups {
+            let richTextObjects = group.map { chunk in
+                RichText(type: "text", text: TextContent(content: chunk, link: nil), annotations: nil)
+            }
+            
+            let block = Block(
+                type: "code", paragraph: nil, image: nil, 
+                code: CodeBlock(
+                    caption: [RichText(type: "text", text: TextContent(content: "NotionSketch Data", link: nil), annotations: nil)],
+                    richText: richTextObjects, language: "json"
+                ), 
+                toggle: nil,
+                children: nil
+            )
+            codeBlocks.append(block)
+        }
+        
+        // 4. Create Container Toggle Block (Without Children initially)
+        let toggleBlock = Block(
+            type: "toggle", paragraph: nil, image: nil, code: nil,
+            toggle: ToggleBlock(
+                rich_text: [
+                    RichText(type: "text", text: TextContent(content: "Image Data", link: nil), annotations: Annotations(color: "gray"))
+                ],
+                color: "gray"
+            ),
+            children: nil // Do not send children in first request
+        )
+        
+        // 5. Append Toggle Block to Page
+        let urlString = "\(NotionConfig.baseURL)/blocks/\(pageID)/children"
+        guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+        
+        var request = try await authorizedRequest(url: url, method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let requestBody = AppendChildrenRequest(children: [toggleBlock])
+        request.httpBody = try JSONEncoder().encode(requestBody)
+        
+        let (data, response) = try await safeRequest(request, context: "appendDataBlock(Toggle)")
+        let validatedData = try validate(data, response)
+        
+        // 6. Get New Toggle Block ID
+        let decoded = try JSONDecoder().decode(BlockChildrenResponse.self, from: validatedData)
+        guard let newToggleID = decoded.results.first?.id else {
+            // If we can't get ID for some reason, we can't append data.
+            // Just return (data is lost for this sync but prevents crash).
+            // In strict mode we could throw.
+            SyncLogger.log("⚠️ Could not retrieve new Toggle Block ID. Data not saved inside toggle.")
+            return
+        }
+        
+        // 7. Append Code Blocks as children of the new Toggle Block
+        let childUrlString = "\(NotionConfig.baseURL)/blocks/\(newToggleID)/children"
+        guard let childUrl = URL(string: childUrlString) else { throw NotionServiceError.invalidURL }
+        
+        var childRequest = try await authorizedRequest(url: childUrl, method: "PATCH")
+        childRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        // Append in batches of 100 blocks if needed (Notion limit)
+        // Though unlikely for one drawing to exceed 100 blocks (20MB)
+        let childRequestBody = AppendChildrenRequest(children: codeBlocks)
+        childRequest.httpBody = try JSONEncoder().encode(childRequestBody)
+        
+        let (childData, childResponse) = try await safeRequest(childRequest, context: "appendDataBlock(Children)")
+        _ = try validate(childData, childResponse)
     }
 
     // MARK: - Clear Page Blocks
@@ -487,7 +736,7 @@ actor NotionService {
             }
 
             let request = try await authorizedRequest(url: url, method: "GET")
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await safeRequest(request, context: "clearPageBlocks")
             let validatedData = try validate(data, response)
 
             let decoded: BlockChildrenResponse
@@ -510,7 +759,7 @@ actor NotionService {
             }
 
             let request = try await authorizedRequest(url: url, method: "DELETE")
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await safeRequest(request, context: "deleteBlock")
             _ = try validate(data, response)
         }
     }
@@ -544,14 +793,20 @@ actor NotionService {
         let encoder = JSONEncoder()
         request.httpBody = try encoder.encode(requestBody)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "appendBlocks")
         _ = try validate(data, response)
     }
 
     // MARK: - Update Page Properties
 
-    /// Updates properties of an existing page: Title, OCR text, and Deep Link.
-    func updatePageProperties(pageID: String, title: String? = nil, ocrText: String? = nil, appLink: String? = nil) async throws {
+    /// Updates properties of an existing page: Title, OCR text, Deep Link, and Drawing Encoding.
+    func updatePageProperties(
+        pageID: String,
+        title: String? = nil,
+        ocrText: String? = nil,
+        appLink: String? = nil,
+        drawingEncoding: String? = nil
+    ) async throws {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
             throw NotionServiceError.invalidURL
         }
@@ -559,8 +814,7 @@ actor NotionService {
         var properties: [String: Any] = [:]
         
         if let title {
-             // We need the title property name. It's safe to re-fetch or assume "Name". 
-             // Ideally we should cache or reuse logic, but fetching schema every time is safer for correctness.
+             // We need the title property name.
              let dbID = await getDatabaseID()
              let titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
              properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
@@ -570,6 +824,14 @@ actor NotionService {
             properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
         }
 
+        if let drawingEncoding {
+            // Chunk the drawing data into 2000-char text objects
+            let chunks = chunkString(drawingEncoding, size: 2000)
+            let richTextObjects = chunks.map { chunk in
+                ["text": ["content": chunk]]
+            }
+            properties["Drawing Encode"] = [ "rich_text": richTextObjects ]
+        }
 
         var finalAppLink = appLink
         if let link = appLink, link.hasPrefix("notionsketch") {
@@ -591,20 +853,77 @@ actor NotionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "updatePageProperties")
         
         do {
              _ = try validate(data, response)
         } catch {
              let raw = String(data: data, encoding: .utf8) ?? "<binary>"
              // If property is missing, Notion returns 400 validation_error.
-             // We log this as a warning but allow the sync to proceed (clearing blocks/appending image).
             if raw.contains("validation_error") || raw.contains("property_not_found") || raw.contains("does not exist") {
                 SyncLogger.log("⚠️ Property update skipped (Missing Notion Property?): \(raw)")
                 return
             }
             throw NotionServiceError.decodingFailed("updatePage: \(error.localizedDescription) — raw: \(raw.prefix(300))")
         }
+    }
+    
+    // MARK: - Drawing Encoding Helpers
+    
+    /// Compresses and encodes drawing data into a Base64 string.
+    /// Uses LZFSE compression to minimize payload size for Notion.
+    nonisolated func encodeDrawing(_ drawing: PKDrawing) throws -> String {
+        let data = drawing.dataRepresentation() 
+        
+        // Attempt LZFSE compression
+        if let compressed = try? (data as NSData).compressed(using: .lzfse) {
+             let base64 = compressed.base64EncodedString()
+             return "LZFSE:" + base64
+        }
+        
+        // Fallback to raw base64 if compression fails (unlikely)
+        return data.base64EncodedString()
+    }
+    
+    /// Decodes a Base64 string back into a PKDrawing.
+    /// Supports both compressed ("LZFSE:") and legacy raw formats.
+    nonisolated func decodeDrawing(from base64String: String) throws -> PKDrawing {
+        var base64 = base64String
+        var isCompressed = false
+        
+        if base64String.hasPrefix("LZFSE:") {
+            base64 = String(base64String.dropFirst(6))
+            isCompressed = true
+        }
+        
+        guard let data = Data(base64Encoded: base64) else {
+            throw NotionServiceError.decodingFailed("Invalid Base64 string")
+        }
+        
+        if isCompressed {
+            do {
+                let decompressed = try (data as NSData).decompressed(using: .lzfse)
+                return try PKDrawing(data: decompressed as Data)
+            } catch {
+                throw NotionServiceError.decodingFailed("Decompression failed: \(error.localizedDescription)")
+            }
+        }
+        
+        return try PKDrawing(data: data)
+    }
+    
+    /// Splits a string into chunks of standard Notion limit (2000 chars).
+    nonisolated func chunkString(_ string: String, size: Int = 2000) -> [String] {
+        var chunks: [String] = []
+        var currentIndex = string.startIndex
+        
+        while currentIndex < string.endIndex {
+            let endIndex = string.index(currentIndex, offsetBy: size, limitedBy: string.endIndex) ?? string.endIndex
+            chunks.append(String(string[currentIndex..<endIndex]))
+            currentIndex = endIndex
+        }
+        
+        return chunks
     }
     
     // MARK: - URL Shortening (Workaround for Notion iOS)
@@ -684,16 +1003,16 @@ actor NotionService {
         }
     }
 
-    // MARK: - Fetch Page Details (Title + Icon + Relations)
+    // MARK: - Fetch Page Details (Title + Icon + Relations + Drawing)
     
-    /// Fetches the current title, icon, and connected page IDs from Notion.
-    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?, connectedIDs: [String])? {
+    /// Fetches the current title, icon, connected page IDs, and drawing encoding from Notion.
+    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?, connectedIDs: [String], drawingNum: String?)? {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
             throw NotionServiceError.invalidURL
         }
         
         let request = try await authorizedRequest(url: url, method: "GET")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "fetchPageDetails")
         let validatedData = try validate(data, response)
         
         let decoded: PageDetailsResponse
@@ -707,16 +1026,23 @@ actor NotionService {
         // Find title property and connected pages relation
         var title = "Untitled"
         var connectedIDs: [String] = []
+        var drawingEncoded: String? = nil
         
         for (key, property) in decoded.properties {
             if property.type == "title", let titleObjects = property.title {
                 title = titleObjects.map { $0.text.content }.joined()
             } else if property.type == "relation", key == "Connected Pages", let relations = property.relation {
                 connectedIDs = relations.map { $0.id }
+            } else if property.type == "rich_text", key == "Drawing Encode", let richTexts = property.rich_text {
+                // Determine if there is content
+                let fullText = richTexts.map { $0.text.content }.joined()
+                if !fullText.isEmpty {
+                    drawingEncoded = fullText
+                }
             }
         }
         
-        return (title, decoded.icon?.value, connectedIDs)
+        return (title, decoded.icon?.value, connectedIDs, drawingEncoded)
     }
     
     // MARK: - Archive (Trash) a Page
@@ -734,7 +1060,7 @@ actor NotionService {
         let payload: [String: Any] = ["archived": true]
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "archivePage")
         _ = try validate(data, response)
         
         SyncLogger.log("🗑️ Archived Notion page: \(pageID)")
@@ -751,16 +1077,10 @@ actor NotionService {
             throw NotionServiceError.notConfigured
         }
         
-        // Step 1: Get the data source ID from the database
-        // (API version 2025-09-03 deprecated POST /databases/{id}/query
-        //  in favor of POST /data_sources/{data_source_id}/query)
-        let dataSourceID = try await getDataSourceID(databaseID: databaseID)
-        
-        let urlString = "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)/query"
+        let urlString = "\(NotionConfig.baseURL)/databases/\(databaseID)/query"
         SyncLogger.log("🔍 fetchActivePageIDs URL: \(urlString)")
         
         guard let url = URL(string: urlString) else {
-            SyncLogger.log("❌ fetchActivePageIDs: Could not create URL from: \(urlString)")
             throw NotionServiceError.invalidURL
         }
         
@@ -781,13 +1101,7 @@ actor NotionService {
             
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             
-            let (data, response) = try await session.data(for: request)
-            
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                let body = String(data: data, encoding: .utf8) ?? "<no body>"
-                SyncLogger.log("❌ fetchActivePageIDs HTTP \(httpResponse.statusCode): \(body)")
-            }
-            
+            let (data, response) = try await safeRequest(request, context: "fetchActivePageIDs")
             let validatedData = try validate(data, response)
             
             guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
@@ -811,46 +1125,13 @@ actor NotionService {
         return allPageIDs
     }
     
-    // MARK: - Data Source ID Resolution
-    
-    /// Retrieves the data_source_id for a database (required for API version 2025-09-03+).
-    /// The database object contains a `data_sources` array; we use the first one.
-    private func getDataSourceID(databaseID: String) async throws -> String {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
-            throw NotionServiceError.invalidURL
-        }
-        
-        let request = try await authorizedRequest(url: url, method: "GET")
-        let (data, response) = try await session.data(for: request)
-        let validatedData = try validate(data, response)
-        
-        guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any] else {
-            throw NotionServiceError.decodingFailed("Could not parse database response")
-        }
-        
-        // data_sources is an array of objects, each with an "id" field
-        if let dataSources = json["data_sources"] as? [[String: Any]],
-           let firstDS = dataSources.first,
-           let dsID = firstDS["id"] as? String {
-            SyncLogger.log("🔗 Resolved data_source_id: \(dsID)")
-            return dsID
-        }
-        
-        if let dataSource = json["data_source"] as? [String: Any],
-           let dsID = dataSource["id"] as? String {
-            SyncLogger.log("🔗 Resolved data_source_id (singular): \(dsID)")
-            return dsID
-        }
-        
-        SyncLogger.log("⚠️ No data_sources found, trying database ID as fallback")
-        return databaseID
-    }
+
     
     // MARK: - Search Pages
     
     /// Searches for pages in Notion matching the query string.
-    /// Returns a list of (id, title, icon) tuples.
-    func searchNotionPages(query: String) async throws -> [(id: String, title: String, icon: String?)] {
+    /// Returns a list of (id, title, icon, parentID) tuples.
+    func searchNotionPages(query: String) async throws -> [(id: String, title: String, icon: String?, parentID: String?)] {
         guard let url = URL(string: "\(NotionConfig.baseURL)/search") else {
             throw NotionServiceError.invalidURL
         }
@@ -869,7 +1150,7 @@ actor NotionService {
         
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "searchNotionPages")
         let validatedData = try validate(data, response)
         
         // Decode manually since property names are dynamic
@@ -878,12 +1159,18 @@ actor NotionService {
             return []
         }
         
-        var foundPages: [(id: String, title: String, icon: String?)] = []
+        var foundPages: [(id: String, title: String, icon: String?, parentID: String?)] = []
         
         for object in results {
             guard let id = object["id"] as? String,
                   let properties = object["properties"] as? [String: Any] else { continue }
             
+            // Extract Parent Database ID
+            var parentID: String? = nil
+            if let parent = object["parent"] as? [String: Any] {
+                parentID = parent["database_id"] as? String
+            }
+
             // Find title property
             var titleString = "Untitled"
             
@@ -913,7 +1200,7 @@ actor NotionService {
                 }
             }
             
-            foundPages.append((id: id, title: titleString, icon: iconString))
+            foundPages.append((id: id, title: titleString, icon: iconString, parentID: parentID))
         }
         
         return foundPages
@@ -941,7 +1228,7 @@ actor NotionService {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "updateConnectedPages")
         
         // Custom validation to catch missing property error
         if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 400 {
@@ -988,52 +1275,96 @@ actor NotionService {
         let databaseID = await getDatabaseID()
         guard !databaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         
+        // Notion API will send a 302 redirect if the ID is a page ID but treated as a database ID? 
+        // Or if the content is "Compact" vs "Full".
+        // Use GET /v1/databases/{id}
+        // If properties are empty, it might be that the integration doesn't have access to the CONTENT of the database, only the title?
+        // Or the 'properties' field is not returned for some reason?
+        
         let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)")!
         let request = try await authorizedRequest(url: url)
         
-        let (data, _) = try await session.data(for: request)
+        let (data, _) = try await safeRequest(request, context: "fetchConnectedPagesTarget")
+        
+        // Debug: Inspect raw keys
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let objectType = json["object"] as? String ?? "unknown"
+            SyncLogger.log("ℹ️ API Object Type: \(objectType)")
+            
+            if let props = json["properties"] as? [String: Any] {
+                 let keys = props.keys.sorted().joined(separator: ", ")
+                 SyncLogger.log("🔎 RAW API Properties: \(keys)")
+            } else {
+                 SyncLogger.log("⚠️ 'properties' key missing or not a dictionary. Keys found: \(json.keys.joined(separator: ", "))")
+            }
+        } else {
+             let rawStr = String(data: data, encoding: .utf8) ?? ""
+             SyncLogger.log("⚠️ Failed to parse JSON. Raw: \(rawStr.prefix(200))...")
+        }
+
         let decoded = try JSONDecoder().decode(DatabaseResponse.self, from: data)
         
         // Find "Connected Pages" property (case-insensitive) and get its relation target
+        let allKeys = decoded.properties?.keys.map { $0 } ?? []
+        SyncLogger.log("📋 Database Properties Found: \(allKeys.joined(separator: ", "))")
+        
         let key = decoded.properties?.keys.first(where: { $0.localizedCaseInsensitiveCompare("Connected Pages") == .orderedSame })
         
         if let key = key,
            let property = decoded.properties?[key],
            let relation = property.relation {
+            SyncLogger.log("🔗 Found 'Connected Pages' Relation Target DB: \(relation.database_id ?? "nil")")
             return relation.database_id
         }
+        SyncLogger.log("⚠️ Could not find 'Connected Pages' property or relation config in database schema.")
         return nil
     }
 
     /// Queries a specific database for pages matching a title query.
     func queryDatabase(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
-        // 1. Get correct API endpoint (via Data Source ID usually)
-        let dataSourceID = try await getDataSourceID(databaseID: databaseID)
-        let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)/query")!
-        
-        // 2. We need to filter by Title. But "Title" property name varies.
-        // We'll fetch the target database schema to get its title property name first.
-        let titleKey = try await getDatabaseTitlePropertyName(databaseID: databaseID)
-        
+        guard let url = URL(string: "\(NotionConfig.baseURL)/search") else {
+            throw NotionServiceError.invalidURL
+        }
+
         var request = try await authorizedRequest(url: url, method: "POST")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let payload: [String: Any] = [
+        // Re-attempting strictly with POST /v1/databases/{id}/query
+        // This is the standard way to search WITHIN a database.
+        guard let dbQueryUrl = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query") else {
+             throw NotionServiceError.invalidURL
+        }
+        
+        // We override the request
+        request = try await authorizedRequest(url: dbQueryUrl, method: "POST")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // We need to filter by title.
+        // We need the property name for the title.
+        let titleKey = try await getDatabaseTitlePropertyName(databaseID: databaseID)
+
+        let dbPayload: [String: Any] = [
             "filter": [
                 "property": titleKey,
                 "title": [
                     "contains": query
                 ]
             ],
+            "sorts": [
+                [
+                    "timestamp": "last_edited_time",
+                    "direction": "descending"
+                ]
+            ],
             "page_size": 20
         ]
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        request.httpBody = try JSONSerialization.data(withJSONObject: dbPayload)
         
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await safeRequest(request, context: "queryDatabase_strict")
         let validatedData = try validate(data, response)
         
-        // Reuse parsing logic from searchNotionPages
+        // Parse results
         guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
               let results = json["results"] as? [[String: Any]] else {
             return []
@@ -1078,12 +1409,33 @@ actor NotionService {
 }
 
 
-// MARK: - Data + String Append Helper
 
+
+// MARK: - Data + String Append Helper
 private extension Data {
     mutating func append(_ string: String) {
         if let data = string.data(using: .utf8) {
             append(data)
+        }
+    }
+}
+
+// MARK: - Safe Network Helper
+extension NotionService {
+    /// Wrapper for session.data(for:) to catch and log "cannot parse response" errors
+    private func safeRequest(_ request: URLRequest, context: String) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch {
+            let nsError = error as NSError
+            // Log specific networking errors
+            if nsError.domain == NSURLErrorDomain {
+                SyncLogger.log("❌ Network Error in \(context): \(nsError.localizedDescription) (Code: \(nsError.code))")
+                if nsError.code == NSURLErrorCannotParseResponse {
+                     SyncLogger.log("⚠️ This usually means the server returned an empty body or invalid headers for the request type.")
+                }
+            }
+            throw error
         }
     }
 }

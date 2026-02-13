@@ -76,7 +76,7 @@ struct DrawingListView: View {
             SettingsView()
         }
         .task(id: deletionSyncID) {
-            await syncDeletionsFromNotion()
+            await syncWithNotion()
         }
         .onAppear {
             // Trigger a new deletion sync each time the list appears
@@ -138,7 +138,7 @@ struct DrawingListView: View {
             .padding()
         }
         .refreshable {
-            await syncDeletionsFromNotion()
+            await syncWithNotion()
         }
         .alert("Rename Sketch", isPresented: Binding(
             get: { renamingSketch != nil },
@@ -190,11 +190,12 @@ struct DrawingListView: View {
         }
     }
     
-    // MARK: - Sync Deletions from Notion
+    // MARK: - Sync with Notion (Deletions & Imports)
     
-    /// Checks Notion for pages that have been archived/trashed remotely.
-    /// Removes matching local sketches.
-    private func syncDeletionsFromNotion() async {
+    /// Synchronizes local sketches with Notion:
+    /// 1. Removes local sketches whose remote pages are deleted/archived.
+    /// 2. Imports valid remote pages that don't exist locally.
+    private func syncWithNotion() async {
         guard SettingsManager.shared.isConfigured else { return }
         guard !isSyncingDeletions else { return }
         
@@ -202,39 +203,77 @@ struct DrawingListView: View {
         defer { isSyncingDeletions = false }
         
         do {
+            // 1. Fetch all active page IDs from Notion
             let activePageIDs = try await notionService.fetchActivePageIDs()
             
-            // Normalize IDs: strip hyphens, lowercase (Notion API formats can vary)
+            // Normalize IDs: strip hyphens, lowercase
             let normalizedActive = Set(activePageIDs.map { $0.replacingOccurrences(of: "-", with: "").lowercased() })
+            let localMap = Dictionary(uniqueKeysWithValues: sketches.compactMap { sketch -> (String, SketchDocument)? in
+                guard let id = sketch.notionPageID else { return nil }
+                return (id.replacingOccurrences(of: "-", with: "").lowercased(), sketch)
+            })
             
-            SyncLogger.log("🔍 Deletion sync: \(normalizedActive.count) active pages, \(sketches.filter { $0.notionPageID != nil }.count) synced sketches")
+            SyncLogger.log("🔄 Full Sync: \(normalizedActive.count) active remote, \(localMap.count) synced local")
             
-            // Find local sketches whose Notion page no longer exists (or is archived)
-            let sketchesToRemove = sketches.filter { sketch in
-                guard let pageID = sketch.notionPageID else { return false }
-                let normalizedLocal = pageID.replacingOccurrences(of: "-", with: "").lowercased()
-                let isActive = normalizedActive.contains(normalizedLocal)
-                if !isActive {
-                    SyncLogger.log("🗑️ Page \(pageID) not found in active pages — will remove '\(sketch.title)'")
+            // 2. Process Deletions (Local sketch exists, but remote ID is missing)
+            var deletedCount = 0
+            for (localID, sketch) in localMap {
+                if !normalizedActive.contains(localID) {
+                    SyncLogger.log("🗑️ Page \(sketch.notionPageID ?? "") not found in active pages — removing '\(sketch.title)'")
+                    if selectedSketch?.id == sketch.id {
+                        selectedSketch = nil
+                    }
+                    modelContext.delete(sketch)
+                    deletedCount += 1
                 }
-                return !isActive
             }
             
-            for sketch in sketchesToRemove {
-                SyncLogger.log("🗑️ Removing locally (archived in Notion): '\(sketch.title)'")
-                if selectedSketch?.id == sketch.id {
-                    selectedSketch = nil
+            // 3. Process Imports (Remote ID exists, but no local sketch)
+            var importedCount = 0
+            for remoteID in activePageIDs {
+                let normalizedRemote = remoteID.replacingOccurrences(of: "-", with: "").lowercased()
+                
+                if localMap[normalizedRemote] == nil {
+                    // This is a new/restored page from Notion!
+                    SyncLogger.log("📥 Found new/restored page \(remoteID) — importing...")
+                    
+                    if let (title, _, _, _) = try? await notionService.fetchPageDetails(pageID: remoteID),
+                       let drawingEncoded = try? await notionService.fetchPageBlocks(pageID: remoteID),
+                       !drawingEncoded.isEmpty {
+                        
+                        do {
+                            // Decode drawing
+                            let drawing = try notionService.decodeDrawing(from: drawingEncoded)
+                            let drawingData = drawing.dataRepresentation()
+                            
+                            // Create new document
+                            let newSketch = SketchDocument(
+                                title: title.isEmpty ? "Imported Sketch" : title,
+                                drawingData: drawingData,
+                                notionPageID: remoteID
+                            )
+                            newSketch.updateThumbnail() // Generate thumbnail
+                            
+                            modelContext.insert(newSketch)
+                            importedCount += 1
+                            SyncLogger.log("✅ Imported '\(newSketch.title)'")
+                        } catch {
+                            SyncLogger.log("⚠️ Failed to decode drawing for page \(remoteID): \(error.localizedDescription)")
+                        }
+                    } else {
+                        SyncLogger.log("ℹ️ Page \(remoteID) has no drawing data (in body) to import.")
+                    }
                 }
-                modelContext.delete(sketch)
             }
             
-            if sketchesToRemove.isEmpty {
-                SyncLogger.log("✅ Deletion sync complete — all synced sketches still active")
+            if deletedCount > 0 || importedCount > 0 {
+                SyncLogger.log("✅ Sync complete: \(deletedCount) deleted, \(importedCount) imported.")
             } else {
-                SyncLogger.log("🗑️ Removed \(sketchesToRemove.count) sketch(es) deleted in Notion")
+                SyncLogger.log("✅ Sync complete: Local and Remote are in sync.")
             }
+            
         } catch {
-            SyncLogger.log("⚠️ Failed to sync deletions from Notion: \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Failed to sync with Notion: \(error.localizedDescription)")
         }
     }
 }

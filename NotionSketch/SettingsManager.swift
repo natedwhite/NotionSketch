@@ -15,6 +15,7 @@ final class SettingsManager {
     private enum Keys {
         static let apiToken = "notion_api_token"
         static let databaseID = "notion_database_id"
+        static let connectedPagesDatabaseID = "notion_connected_pages_database_id"
         static let shortIoApiKey = "short_io_api_key"
         static let shortIoDomain = "short_io_domain"
     }
@@ -45,6 +46,19 @@ final class SettingsManager {
     var databaseID: String {
         SettingsManager.extractDatabaseID(from: databaseInput)
     }
+    
+    /// Raw input for the Connected Pages database.
+    var connectedPagesDatabaseInput: String {
+        didSet {
+            let extracted = SettingsManager.extractDatabaseID(from: connectedPagesDatabaseInput)
+            UserDefaults.standard.set(extracted, forKey: Keys.connectedPagesDatabaseID)
+        }
+    }
+    
+    /// The cleaned Connected Pages database ID.
+    var connectedPagesDatabaseID: String {
+        SettingsManager.extractDatabaseID(from: connectedPagesDatabaseInput)
+    }
 
     // MARK: - Computed
 
@@ -62,6 +76,7 @@ final class SettingsManager {
         self.shortIoDomain = UserDefaults.standard.string(forKey: Keys.shortIoDomain) ?? "short.gy"
         // Load saved database ID and put it in databaseInput
         self.databaseInput = UserDefaults.standard.string(forKey: Keys.databaseID) ?? ""
+        self.connectedPagesDatabaseInput = UserDefaults.standard.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
     }
 
     // MARK: - URL Parsing

@@ -54,6 +54,33 @@ struct SettingsView: View {
                 } footer: {
                     Text("Paste the full Notion database URL — the database ID will be extracted automatically. Make sure your integration is connected to this database.")
                 }
+                
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Connected Pages Database", systemImage: "link.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        TextField("Optional: Paste database URL or ID…", text: $settings.connectedPagesDatabaseInput)
+                            .font(.system(.body, design: .monospaced))
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+
+                        if !settings.connectedPagesDatabaseID.isEmpty && settings.connectedPagesDatabaseInput != settings.connectedPagesDatabaseID {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                    .imageScale(.small)
+                                Text("ID: \(settings.connectedPagesDatabaseID)")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } footer: {
+                    Text("The database that contains the pages you want to link to. If left blank, the app will try to detect it automatically (which may fail if API permissions are restricted).")
+                }
 
 
                 Section {

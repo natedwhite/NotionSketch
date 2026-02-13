@@ -5,6 +5,7 @@ import Foundation
 enum SyncLogger {
 
     private static let fileName = "sync_log.txt"
+    private static let maxLogSize = 1024 * 1024 // 1MB
 
     private static var logFileURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -18,6 +19,13 @@ enum SyncLogger {
         print("[Sync] \(message)")
 
         let url = logFileURL
+        
+        // Check size and rotate if needed
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? UInt64, size > maxLogSize {
+            rotateLog()
+        }
+
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
             if let data = line.data(using: .utf8) {
@@ -28,10 +36,39 @@ enum SyncLogger {
             try? line.write(to: url, atomically: true, encoding: .utf8)
         }
     }
+    
+    private static func rotateLog() {
+        // Simple rotation: Rename current to .old, delete previous .old
+        let url = logFileURL
+        let oldUrl = url.deletingPathExtension().appendingPathExtension("old.txt")
+        
+        try? FileManager.default.removeItem(at: oldUrl)
+        try? FileManager.default.moveItem(at: url, to: oldUrl)
+    }
 
-    /// Reads the full log contents.
+    /// Reads the tail of the log file to avoid main thread freeze.
     static func readLog() -> String {
-        (try? String(contentsOf: logFileURL, encoding: .utf8)) ?? "(no log file)"
+        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else { return "(no log file)" }
+        let fileSize = handle.seekToEndOfFile()
+        let maxReadSize: UInt64 = 20 * 1024 // 20KB
+        
+        let startOffset = fileSize > maxReadSize ? fileSize - maxReadSize : 0
+        
+        do {
+            try handle.seek(toOffset: startOffset)
+            let data = handle.readDataToEndOfFile()
+            handle.closeFile()
+            
+            var text = String(data: data, encoding: .utf8) ?? "(binary log data)"
+            
+            // If we truncated, add a note
+            if startOffset > 0 {
+                text = "[... truncated first \(startOffset) bytes ...]\n" + text
+            }
+            return text
+        } catch {
+            return "Error reading log: \(error.localizedDescription)"
+        }
     }
 
     /// Clears the log.

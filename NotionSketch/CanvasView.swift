@@ -1,60 +1,37 @@
 import SwiftUI
 import PencilKit
 
-// MARK: - Dot Grid View (draws only visible dots, repositions via offset)
+// MARK: - Dot Grid View (CALayer-based for smooth animation)
 
-/// Fills its bounds with a dot grid, offset to match canvas scrolling.
-/// Only draws dots visible on screen — zero memory overhead.
+/// Fills its bounds with a dot grid, stable against sidebar shifts.
+/// Uses a pattern layer to ensure Core Animation handles changes smoothly (no jitter).
 class DotGridView: UIView {
-
-    /// The content-space coordinate at the screen origin (contentOffset / zoomScale)
-    var contentSpaceOrigin: CGPoint = .zero
-    var zoomScale: CGFloat = 1.0
-
-    private let baseDotSpacing: CGFloat = 30
+    
+    // Fixed pattern configuration
+    private let dotSpacing: CGFloat = 40
     private let dotRadius: CGFloat = 1.5
-
+    
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = .systemBackground
+        backgroundColor = createPatternColor()
         isUserInteractionEnabled = false
-        contentMode = .redraw
+        // Anchor point at top-left to make scaling/positioning math easier
+        layer.anchorPoint = .zero
     }
-
+    
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
-
-    override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext() else { return }
-
-        let dotColor = UIColor.systemGray3.withAlphaComponent(0.5)
-        ctx.setFillColor(dotColor.cgColor)
-
-        let screenSpacing = baseDotSpacing * zoomScale
-        guard screenSpacing > 4 else { return } // Don't draw at extreme zoom-out
-
-        // Compute grid phase in CONTENT-SPACE (zoom-independent), then scale to screen.
-        // This keeps dots stable during zoom.
-        var cModX = contentSpaceOrigin.x.truncatingRemainder(dividingBy: baseDotSpacing)
-        var cModY = contentSpaceOrigin.y.truncatingRemainder(dividingBy: baseDotSpacing)
-        // Ensure positive modulo
-        if cModX < 0 { cModX += baseDotSpacing }
-        if cModY < 0 { cModY += baseDotSpacing }
-
-        let modX = cModX * zoomScale
-        let modY = cModY * zoomScale
-
-        let r = dotRadius
-        var x = -modX
-        while x <= rect.width + screenSpacing {
-            var y = -modY
-            while y <= rect.height + screenSpacing {
-                ctx.fillEllipse(in: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2))
-                y += screenSpacing
-            }
-            x += screenSpacing
+    
+    private func createPatternColor() -> UIColor? {
+        let size = CGSize(width: dotSpacing, height: dotSpacing)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { ctx in
+            let c = ctx.cgContext
+            c.setFillColor(UIColor.tertiaryLabel.withAlphaComponent(0.4).cgColor)
+            c.fillEllipse(in: CGRect(x: 0, y: 0, width: dotRadius * 2, height: dotRadius * 2))
         }
+        return UIColor(patternImage: image)
     }
 }
 
@@ -66,38 +43,92 @@ class DotGridView: UIView {
 /// (e.g. sidebar opening/closing).
 class CanvasContainer: UIView {
     weak var canvasView: PKCanvasView?
-    weak var dotGridView: DotGridView?
 
     /// Closure to activate the tool picker once the view is in a window.
     var onReadyToActivate: (() -> Void)?
     private var hasActivated = false
     private var hasSetInitialOffset = false
+    private var lastGlobalOrigin: CGPoint?
 
     override func layoutSubviews() {
         super.layoutSubviews()
 
-        // Pin canvas to the RIGHT edge of the screen.
-        // When the sidebar opens, the container shrinks from the left,
-        // but the canvas stays screen-width and extends behind the sidebar (clipped).
-        // This means the canvas never resizes → contentOffset never shifts.
-        let screenWidth = UIScreen.main.bounds.width
-        let canvasFrame = CGRect(
-            x: bounds.width - screenWidth,
-            y: 0,
-            width: screenWidth,
-            height: bounds.height
-        )
+        // Standard full-width layout
+        canvasView?.frame = bounds
 
-        dotGridView?.frame = canvasFrame
-        canvasView?.frame = canvasFrame
-
-        // Set initial contentOffset once we have a real frame
+        // 1. Initial Setup: Center on Content
         if !hasSetInitialOffset, bounds.height > 0, let cv = canvasView {
             hasSetInitialOffset = true
-            cv.contentOffset = CGPoint(
-                x: (DrawingCanvas.canvasSize - screenWidth) / 2,
-                y: (DrawingCanvas.canvasSize - bounds.height) / 2
-            )
+            
+            // 1. Center on existing drawing content if available
+            let drawingBounds = cv.drawing.bounds
+            if !drawingBounds.isNull, !drawingBounds.isEmpty, drawingBounds.width > 0, drawingBounds.height > 0 {
+                
+                // Calculate "Zoom to Fit" scale with padding
+                let padding: CGFloat = 50
+                let availableWidth = bounds.width - (padding * 2)
+                let availableHeight = bounds.height - (padding * 2)
+                
+                let scaleX = availableWidth / drawingBounds.width
+                let scaleY = availableHeight / drawingBounds.height
+                
+                // Use the smaller scale to ensure it fits, but clamp to allowed range
+                let targetScale = min(scaleX, scaleY)
+                let clampedScale = min(max(targetScale, cv.minimumZoomScale), cv.maximumZoomScale)
+                
+                cv.zoomScale = clampedScale
+                
+                // Center based on the NEW scale
+                // Content coordinates scale with zoomScale
+                let scaledMidX = drawingBounds.midX * clampedScale
+                let scaledMidY = drawingBounds.midY * clampedScale
+                
+                let offsetX = scaledMidX - (bounds.width / 2)
+                let offsetY = scaledMidY - (bounds.height / 2)
+                
+                cv.contentOffset = CGPoint(x: offsetX, y: offsetY)
+            } else {
+                // 2. Default: Center the vast canvas
+                // Reset zoom to sensible default
+                if cv.zoomScale < 0.5 { cv.zoomScale = 0.5 } 
+                
+                cv.contentOffset = CGPoint(
+                    x: (DrawingCanvas.canvasSize * cv.zoomScale - bounds.width) / 2,
+                    y: (DrawingCanvas.canvasSize * cv.zoomScale - bounds.height) / 2
+                )
+            }
+            
+            // Initialize tracker
+            lastGlobalOrigin = convert(CGPoint.zero, to: nil)
+            return
+        }
+        
+        // 2. Continuous Stabilization: Lock content to Screen
+        // If the view moves (e.g. sidebar opens/closes), adjust offset to keep content stationary visually.
+        if let lastOrigin = lastGlobalOrigin, let cv = canvasView {
+            let currentOrigin = convert(CGPoint.zero, to: nil)
+            
+            let deltaX = currentOrigin.x - lastOrigin.x
+            let deltaY = currentOrigin.y - lastOrigin.y
+            
+            if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
+                var off = cv.contentOffset
+                off.x += deltaX
+                off.y += deltaY
+                
+                // Ensure we don't scroll out of bounds (clamping)
+                let maxOffsetX = cv.contentSize.width - cv.bounds.width
+                let maxOffsetY = cv.contentSize.height - cv.bounds.height
+                off.x = max(0, min(off.x, maxOffsetX))
+                off.y = max(0, min(off.y, maxOffsetY))
+                
+                cv.contentOffset = off
+                
+                // Note: DotGrid update is handled automatically because it is a subview of canvasView
+            }
+            lastGlobalOrigin = currentOrigin
+        } else {
+             lastGlobalOrigin = convert(CGPoint.zero, to: nil)
         }
     }
 
@@ -125,7 +156,7 @@ struct DrawingCanvas: UIViewRepresentable {
 
     // Drawable canvas size — large enough to feel infinite.
     // Memory-safe because the dot grid is a separate sibling view.
-    static let canvasSize: CGFloat = 4000
+    static let canvasSize: CGFloat = 8000
 
     @Binding var drawing: PKDrawing
     var onDrawingChanged: (PKDrawing) -> Void
@@ -134,9 +165,7 @@ struct DrawingCanvas: UIViewRepresentable {
         let container = CanvasContainer()
         container.clipsToBounds = true
 
-        // --- Dot grid (behind, fills container) ---
-        let dotGrid = DotGridView()
-        container.addSubview(dotGrid)
+
 
         // --- PKCanvasView (on top, transparent) ---
         let canvasView = PKCanvasView()
@@ -168,11 +197,23 @@ struct DrawingCanvas: UIViewRepresentable {
         canvasView.drawing = drawing
 
         // contentOffset will be set in CanvasContainer.layoutSubviews
-        // once we have a real frame (avoids using UIScreen before layout)
+        
+        // --- Dot grid (inside PKCanvasView) ---
+        // We place it inside to sync with scroll, but we must manually manage its zoom/position
+        // because PKCanvasView manages its own content view.
+        let dotGrid = DotGridView(frame: CGRect(origin: .zero, size: canvasView.contentSize))
+        canvasView.insertSubview(dotGrid, at: 0)
+        canvasView.sendSubviewToBack(dotGrid)
 
         container.addSubview(canvasView)
         container.canvasView = canvasView
-        container.dotGridView = dotGrid
+        
+        // Store references in Coordinator immediately
+        context.coordinator.canvasView = canvasView
+        context.coordinator.dotGridView = dotGrid
+        
+        // Initial sync
+        context.coordinator.updateDotGrid(canvasView)
 
         // --- Undo / Redo gestures ---
         let undoGesture = UITapGestureRecognizer(
@@ -195,9 +236,8 @@ struct DrawingCanvas: UIViewRepresentable {
 
         undoGesture.require(toFail: redoGesture)
 
-        // Store references (tool picker is set up later in didMoveToWindow)
-        context.coordinator.canvasView = canvasView
-        context.coordinator.dotGridView = dotGrid
+        // Reference storing handled above
+
 
         // --- Deferred Tool Picker activation ---
         // PKToolPicker.setVisible + becomeFirstResponder must happen
@@ -221,6 +261,11 @@ struct DrawingCanvas: UIViewRepresentable {
         if context.coordinator.shouldAcceptExternalUpdate {
             context.coordinator.canvasView?.drawing = drawing
             context.coordinator.shouldAcceptExternalUpdate = false
+        }
+        
+        // Ensure ToolPicker remains visible (Fixes "disappearing tools" bug)
+        if let canvasView = uiView.canvasView, let toolPicker = context.coordinator.toolPicker {
+             toolPicker.setVisible(true, forFirstResponder: canvasView)
         }
     }
 
@@ -264,14 +309,20 @@ struct DrawingCanvas: UIViewRepresentable {
 
         func updateDotGrid(_ scrollView: UIScrollView) {
             guard let grid = dotGridView else { return }
+            
+            // Standard UIScrollView Zoom/Scroll Logic for a "background" subview
+            // typical approach: keep it large and just scale it.
             let zoom = scrollView.zoomScale
-            // Convert to content-space origin (zoom-independent)
-            grid.contentSpaceOrigin = CGPoint(
-                x: scrollView.contentOffset.x / zoom,
-                y: scrollView.contentOffset.y / zoom
-            )
-            grid.zoomScale = zoom
-            grid.setNeedsDisplay()
+            
+            // Apply scale
+            // DotGridView has anchorPoint = .zero
+            grid.transform = CGAffineTransform(scaleX: zoom, y: zoom)
+            
+            // Usually, if a view is a subview of the scroll view, it scrolls automatically.
+            // But PKCanvasView might have internal subview hierarchy.
+            // If we added it at index 0, it should be at (0,0) of the verifiable content area.
+            // We just ensure it sticks to (0,0) origin despite transforms.
+            grid.frame.origin = .zero
         }
 
         // MARK: - Undo / Redo

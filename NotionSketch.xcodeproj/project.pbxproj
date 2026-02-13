@@ -20,6 +20,7 @@
 		A10000010000000000000009 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000009 /* SettingsView.swift */; };
 		A1000001000000000000000A /* DrawingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000A /* DrawingListView.swift */; };
 		A1000001000000000000000B /* SyncLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000B /* SyncLogger.swift */; };
+		A1000001000000000000000C /* NotionSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000C /* NotionSyncManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -37,6 +38,7 @@
 		A20000010000000000000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		A2000001000000000000000A /* DrawingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingListView.swift; sourceTree = "<group>"; };
 		A2000001000000000000000B /* SyncLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncLogger.swift; sourceTree = "<group>"; };
+		A2000001000000000000000C /* NotionSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSyncManager.swift; sourceTree = "<group>"; };
 		A30000010000000000000001 /* NotionSketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotionSketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -73,6 +75,7 @@
 				A20000010000000000000009 /* SettingsView.swift */,
 				A2000001000000000000000A /* DrawingListView.swift */,
 				A2000001000000000000000B /* SyncLogger.swift */,
+				A2000001000000000000000C /* NotionSyncManager.swift */,
 				A20000010000000000000006 /* Assets.xcassets */,
 				4512743592DF4D28A160DC4C /* LaunchScreen.storyboard */,
 				C173F8E1922347CBB4C3B7B8 /* LaunchScreen.storyboard */,
@@ -169,6 +172,7 @@
 				A10000010000000000000009 /* SettingsView.swift in Sources */,
 				A1000001000000000000000A /* DrawingListView.swift in Sources */,
 				A1000001000000000000000B /* SyncLogger.swift in Sources */,
+				A1000001000000000000000C /* NotionSyncManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
