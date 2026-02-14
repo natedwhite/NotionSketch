@@ -140,25 +140,24 @@ final class NotionSyncManager {
             // Capture drawing data locally to ensure thread safety when passing to detached tasks
             let drawing = document.drawing
 
-            let imageTask = Task.detached(priority: .userInitiated) {
+            // Start synchronous image generation on background thread
+            async let image = Task.detached(priority: .userInitiated) {
                 return self.drawingToImage(drawing)
-            }
+            }.value
 
-            let encodingTask = Task.detached(priority: .userInitiated) {
-                return try? await self.notionService.encodeDrawing(drawing)
-            }
+            // Start encoding (which is already async and detached in Service)
+            async let drawingEncoding = try? notionService.encodeDrawing(drawing)
 
-            // Await parallel tasks
-            let image = await imageTask.value
-            let drawingEncoding = await encodingTask.value
+            // Await parallel tasks together
+            let (finalImage, finalEncoding) = await (image, drawingEncoding)
             
             // 2. OCR
             step = "ocr"
-            let recognizedText = await recognizeText(in: image)
+            let recognizedText = await recognizeText(in: finalImage)
             
             // 3. Upload Image
             step = "uploadImage"
-            let fileUploadID = try await notionService.uploadDrawingImage(image)
+            let fileUploadID = try await notionService.uploadDrawingImage(finalImage)
             
             // 4. Update/Create Page (Metadata Only)
             let pageID: String
@@ -212,7 +211,7 @@ final class NotionSyncManager {
             }
             
             // 6. Update Drawing Data (Page Body Code Block)
-            if let encoding = drawingEncoding {
+            if let encoding = finalEncoding {
                 step = "updateDrawingData"
                 try await notionService.updatePageContent(pageID: pageID, drawingString: encoding)
             }
