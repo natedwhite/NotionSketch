@@ -75,10 +75,31 @@ private struct RelationConfig: Decodable {
     let database_id: String?
 }
 
+struct RemotePageDetails: Sendable {
+    let id: String
+    let title: String
+    let icon: String?
+    let connectedIDs: [String]
+    let drawingEncoded: String?
+}
+
+private struct QueryDatabaseResponse: Decodable {
+    let results: [PageDetailsResponse]
+    let hasMore: Bool
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case results
+        case hasMore = "has_more"
+        case nextCursor = "next_cursor"
+    }
+}
+
 private struct PageDetailsResponse: Decodable {
     let id: String
     let properties: [String: PageProperty]
     let icon: NotionIcon?
+    let archived: Bool
 }
 
 private struct NotionIcon: Decodable {
@@ -317,6 +338,7 @@ private struct SyncedFrom: Encodable {
 actor NotionService {
 
     private let session: URLSession
+    private var databaseTitlePropertyNames: [String: String] = [:]
 
     init(session: URLSession? = nil) {
         if let session = session {
@@ -544,6 +566,10 @@ actor NotionService {
     /// Retrieves the database and finds the name of the title property.
     /// Notion databases always have exactly one title property, but its name varies.
     private func getDatabaseTitlePropertyName(databaseID: String) async throws -> String {
+        if let cachedName = databaseTitlePropertyNames[databaseID] {
+            return cachedName
+        }
+
         guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
             throw NotionServiceError.invalidURL
         }
@@ -562,9 +588,9 @@ actor NotionService {
         }
 
         // Find the property whose type is "title"
-        // Find the property whose type is "title"
         for (name, property) in decoded.properties ?? [:] {
             if property.type == "title" {
+                databaseTitlePropertyNames[databaseID] = name
                 return name
             }
         }
@@ -1040,44 +1066,48 @@ actor NotionService {
     
     /// Compresses and encodes drawing data into a Base64 string.
     /// Uses LZFSE compression to minimize payload size for Notion.
-    nonisolated func encodeDrawing(_ drawing: PKDrawing) throws -> String {
-        let data = drawing.dataRepresentation() 
-        
-        // Attempt LZFSE compression
-        if let compressed = try? (data as NSData).compressed(using: .lzfse) {
-             let base64 = compressed.base64EncodedString()
-             return "LZFSE:" + base64
-        }
-        
-        // Fallback to raw base64 if compression fails (unlikely)
-        return data.base64EncodedString()
+    nonisolated func encodeDrawing(_ drawing: PKDrawing) async throws -> String {
+        return try await Task.detached(priority: .userInitiated) {
+            let data = drawing.dataRepresentation()
+
+            // Attempt LZFSE compression
+            if let compressed = try? (data as NSData).compressed(using: .lzfse) {
+                let base64 = compressed.base64EncodedString()
+                return "LZFSE:" + base64
+            }
+
+            // Fallback to raw base64 if compression fails (unlikely)
+            return data.base64EncodedString()
+        }.value
     }
     
     /// Decodes a Base64 string back into a PKDrawing.
     /// Supports both compressed ("LZFSE:") and legacy raw formats.
-    nonisolated func decodeDrawing(from base64String: String) throws -> PKDrawing {
-        var base64 = base64String
-        var isCompressed = false
-        
-        if base64String.hasPrefix("LZFSE:") {
-            base64 = String(base64String.dropFirst(6))
-            isCompressed = true
-        }
-        
-        guard let data = Data(base64Encoded: base64) else {
-            throw NotionServiceError.decodingFailed("Invalid Base64 string")
-        }
-        
-        if isCompressed {
-            do {
-                let decompressed = try (data as NSData).decompressed(using: .lzfse)
-                return try PKDrawing(data: decompressed as Data)
-            } catch {
-                throw NotionServiceError.decodingFailed("Decompression failed: \(error.localizedDescription)")
+    nonisolated func decodeDrawing(from base64String: String) async throws -> PKDrawing {
+        return try await Task.detached(priority: .userInitiated) {
+            var base64 = base64String
+            var isCompressed = false
+
+            if base64String.hasPrefix("LZFSE:") {
+                base64 = String(base64String.dropFirst(6))
+                isCompressed = true
             }
-        }
-        
-        return try PKDrawing(data: data)
+
+            guard let data = Data(base64Encoded: base64) else {
+                throw NotionServiceError.decodingFailed("Invalid Base64 string")
+            }
+
+            if isCompressed {
+                do {
+                    let decompressed = try (data as NSData).decompressed(using: .lzfse)
+                    return try PKDrawing(data: decompressed as Data)
+                } catch {
+                    throw NotionServiceError.decodingFailed("Decompression failed: \(error.localizedDescription)")
+                }
+            }
+
+            return try PKDrawing(data: data)
+        }.value
     }
     
     /// Splits a string into chunks of standard Notion limit (2000 chars).
@@ -1191,18 +1221,21 @@ actor NotionService {
             throw NotionServiceError.decodingFailed("fetchPage: \(error.localizedDescription) — raw: \(raw.prefix(300))")
         }
         
-        // Find title property and connected pages relation
+        let details = extractDetails(from: decoded)
+        return (details.title, details.icon, details.connectedIDs, details.drawingEncoded)
+    }
+
+    private func extractDetails(from page: PageDetailsResponse) -> RemotePageDetails {
         var title = "Untitled"
         var connectedIDs: [String] = []
         var drawingEncoded: String? = nil
         
-        for (key, property) in decoded.properties {
+        for (key, property) in page.properties {
             if property.type == "title", let titleObjects = property.title {
                 title = titleObjects.map { $0.text.content }.joined()
             } else if property.type == "relation", key == "Connected Pages", let relations = property.relation {
                 connectedIDs = relations.map { $0.id }
             } else if property.type == "rich_text", key == "Drawing Encode", let richTexts = property.rich_text {
-                // Determine if there is content
                 let fullText = richTexts.map { $0.text.content }.joined()
                 if !fullText.isEmpty {
                     drawingEncoded = fullText
@@ -1210,7 +1243,13 @@ actor NotionService {
             }
         }
         
-        return (title, decoded.icon?.value, connectedIDs, drawingEncoded)
+        return RemotePageDetails(
+            id: page.id,
+            title: title,
+            icon: page.icon?.value,
+            connectedIDs: connectedIDs,
+            drawingEncoded: drawingEncoded
+        )
     }
     
     // MARK: - Archive (Trash) a Page
@@ -1236,9 +1275,9 @@ actor NotionService {
     
     // MARK: - Fetch Active Page IDs (for deletion sync)
     
-    /// Queries the database and returns a set of non-archived page IDs.
-    /// Used to detect pages deleted/archived in Notion.
-    func fetchActivePageIDs() async throws -> Set<String> {
+    /// Queries the database and returns details for all non-archived pages.
+    /// Used to detect pages deleted/archived in Notion and fetch metadata for import.
+    func fetchActivePages() async throws -> [RemotePageDetails] {
         let rawDatabaseID = await getDatabaseID()
         let databaseID = rawDatabaseID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !databaseID.isEmpty else {
@@ -1246,13 +1285,13 @@ actor NotionService {
         }
         
         let urlString = "\(NotionConfig.baseURL)/databases/\(databaseID)/query"
-        SyncLogger.log("🔍 fetchActivePageIDs URL: \(urlString)")
+        SyncLogger.log("🔍 fetchActivePages URL: \(urlString)")
         
         guard let url = URL(string: urlString) else {
             throw NotionServiceError.invalidURL
         }
         
-        var allPageIDs = Set<String>()
+        var allPages: [RemotePageDetails] = []
         var hasMore = true
         var startCursor: String? = nil
         
@@ -1269,28 +1308,29 @@ actor NotionService {
             
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             
-            let (data, response) = try await safeRequest(request, context: "fetchActivePageIDs")
+            let (data, response) = try await safeRequest(request, context: "fetchActivePages")
             let validatedData = try validate(data, response)
             
-            guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]] else {
-                break
+            let decoded: QueryDatabaseResponse
+            do {
+                decoded = try JSONDecoder().decode(QueryDatabaseResponse.self, from: validatedData)
+            } catch {
+                let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
+                throw NotionServiceError.decodingFailed("fetchActivePages: \(error.localizedDescription) — raw: \(raw.prefix(300))")
             }
             
-            for page in results {
-                if let id = page["id"] as? String,
-                   let archived = page["archived"] as? Bool,
-                   !archived {
-                    allPageIDs.insert(id)
+            for page in decoded.results {
+                if !page.archived {
+                    allPages.append(extractDetails(from: page))
                 }
             }
             
-            hasMore = (json["has_more"] as? Bool) ?? false
-            startCursor = json["next_cursor"] as? String
+            hasMore = decoded.hasMore
+            startCursor = decoded.nextCursor
         }
         
-        SyncLogger.log("📋 Fetched \(allPageIDs.count) active pages from Notion")
-        return allPageIDs
+        SyncLogger.log("📋 Fetched \(allPages.count) active pages from Notion")
+        return allPages
     }
     
 

@@ -126,7 +126,7 @@ final class NotionSyncManager {
                 if let remoteEncoding = try? await notionService.fetchPageBlocks(pageID: existingPageID),
                    !remoteEncoding.isEmpty {
                     
-                    let localEncoding = try? notionService.encodeDrawing(document.drawing)
+                    let localEncoding = try? await notionService.encodeDrawing(document.drawing)
                     if let local = localEncoding, local != remoteEncoding {
                         // Conflict / Diff detected.
                         // Currently prioritizing LOCAL PUSH.
@@ -145,7 +145,7 @@ final class NotionSyncManager {
             }
 
             let encodingTask = Task.detached(priority: .userInitiated) {
-                return try? self.notionService.encodeDrawing(drawing)
+                return try? await self.notionService.encodeDrawing(drawing)
             }
 
             // Await parallel tasks
@@ -328,7 +328,7 @@ final class NotionSyncManager {
              
              // Fetch Drawing Data (Block)
              if let encoding = try await notionService.fetchPageBlocks(pageID: pageID), !encoding.isEmpty {
-                 let newDrawing = try notionService.decodeDrawing(from: encoding)
+                 let newDrawing = try await notionService.decodeDrawing(from: encoding)
                  await MainActor.run {
                      document.drawing = newDrawing
                      document.updateThumbnail()
@@ -359,10 +359,15 @@ final class NotionSyncManager {
             let localSketches = try context.fetch(descriptor)
             
             // 1. Fetch all active page IDs from Notion
-            let activePageIDs = try await notionService.fetchActivePageIDs()
+            let activePages = try await notionService.fetchActivePages()
             
             // Normalize IDs: strip hyphens, lowercase
+            let activePageIDs = activePages.map { $0.id }
             let normalizedActive = Set(activePageIDs.map { $0.replacingOccurrences(of: "-", with: "").lowercased() })
+
+            // Create a lookup map for remote details
+            let remotePageMap = Dictionary(activePages.map { ($0.id.replacingOccurrences(of: "-", with: "").lowercased(), $0) }, uniquingKeysWith: { (first, _) in first })
+
             var localMap = Dictionary(uniqueKeysWithValues: localSketches.compactMap { sketch -> (String, SketchDocument)? in
                 guard let id = sketch.notionPageID else { return nil }
                 return (id.replacingOccurrences(of: "-", with: "").lowercased(), sketch)
@@ -391,12 +396,15 @@ final class NotionSyncManager {
                     SyncLogger.log("📥 Found new/restored page \(remoteID) — importing...")
                     
                     do {
-                        // A. Fetch Details
-                        guard let (title, _, connectedIDs, _) = try await notionService.fetchPageDetails(pageID: remoteID) else {
-                            SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
+                        // A. Fetch Details (Use pre-fetched data)
+                        guard let details = remotePageMap[normalizedRemote] else {
+                            SyncLogger.log("⚠️ Failed to find details for \(remoteID) in batch result")
                             continue
                         }
                         
+                        let title = details.title
+                        let connectedIDs = details.connectedIDs
+
                         // B. Fetch Drawing Data (Body)
                         guard let drawingEncoded = try await notionService.fetchPageBlocks(pageID: remoteID),
                               !drawingEncoded.isEmpty else {
@@ -405,14 +413,15 @@ final class NotionSyncManager {
                         }
                         
                         // C. Decode & Import
-                        let drawing = try notionService.decodeDrawing(from: drawingEncoded)
+                        let drawing = try await notionService.decodeDrawing(from: drawingEncoded)
                         let drawingData = drawing.dataRepresentation()
                         
                         // Create new document
                         let newSketch = SketchDocument(
                             title: title.isEmpty ? "Imported Sketch" : title,
                             drawingData: drawingData,
-                            notionPageID: remoteID
+                            notionPageID: remoteID,
+                            cachedDrawing: drawing
                         )
                         newSketch.connectedPageIDs = connectedIDs
                         newSketch.updateThumbnail() // Generate thumbnail
