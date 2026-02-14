@@ -31,7 +31,7 @@ final class NotionSyncManager {
     private var cachedTargetDatabaseID: String? = nil
     
     /// Requests a sync for the given document with a debounce delay.
-    func requestSync(document: SketchDocument, delay: Duration = .seconds(10)) {
+    func requestSync(document: SketchDocument, delay: Duration = AppConstants.Sync.debounceDelay) {
         let id = document.id.uuidString
         var state = documentStates[id] ?? DocumentSyncState()
         
@@ -234,7 +234,7 @@ final class NotionSyncManager {
     
     private func scheduleSuccessDismiss(for id: String) {
         Task {
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: AppConstants.Sync.successDismissDelay)
             if syncStates[id] == .success {
                 syncStates[id] = .idle
             }
@@ -245,14 +245,14 @@ final class NotionSyncManager {
     
     private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
         let bounds = drawing.bounds
-        let padding: CGFloat = 20
+        let padding: CGFloat = AppConstants.Sync.imagePadding
         let imageRect = CGRect(
             x: bounds.origin.x - padding,
             y: bounds.origin.y - padding,
             width: bounds.width + padding * 2,
             height: bounds.height + padding * 2
         )
-        return drawing.image(from: imageRect, scale: 2.0)
+        return drawing.image(from: imageRect, scale: AppConstants.Sync.imageScale)
     }
     
     private func recognizeText(in image: UIImage) async -> String {
@@ -409,7 +409,7 @@ final class NotionSyncManager {
                         SyncLogger.log("✅ Imported '\(newSketch.title)'")
                         
                         // Add a small delay to be nice to the API
-                        try await Task.sleep(for: .milliseconds(100))
+                        try await Task.sleep(for: AppConstants.Sync.librarySyncDelay)
                         
                     } catch {
                         SyncLogger.log("❌ Failed to import page \(remoteID): \(error.localizedDescription)")
