@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write  # <--- THIS IS THE KEY FIX
+
 jobs:
   build:
     runs-on: macos-latest
@@ -27,9 +30,7 @@ jobs:
       - name: Package into IPA
         run: |
           mkdir -p Payload
-          # Copy the built .app into the Payload folder
           cp -r build/Build/Products/Release-iphoneos/NotionSketch.app Payload/
-          # Zip it up into an IPA
           zip -r NotionSketch.ipa Payload
 
       - name: Create Release and Upload IPA
