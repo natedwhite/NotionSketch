@@ -1040,44 +1040,48 @@ actor NotionService {
     
     /// Compresses and encodes drawing data into a Base64 string.
     /// Uses LZFSE compression to minimize payload size for Notion.
-    nonisolated func encodeDrawing(_ drawing: PKDrawing) throws -> String {
-        let data = drawing.dataRepresentation() 
-        
-        // Attempt LZFSE compression
-        if let compressed = try? (data as NSData).compressed(using: .lzfse) {
-             let base64 = compressed.base64EncodedString()
-             return "LZFSE:" + base64
-        }
-        
-        // Fallback to raw base64 if compression fails (unlikely)
-        return data.base64EncodedString()
+    nonisolated func encodeDrawing(_ drawing: PKDrawing) async throws -> String {
+        return try await Task.detached(priority: .userInitiated) {
+            let data = drawing.dataRepresentation()
+
+            // Attempt LZFSE compression
+            if let compressed = try? (data as NSData).compressed(using: .lzfse) {
+                let base64 = compressed.base64EncodedString()
+                return "LZFSE:" + base64
+            }
+
+            // Fallback to raw base64 if compression fails (unlikely)
+            return data.base64EncodedString()
+        }.value
     }
     
     /// Decodes a Base64 string back into a PKDrawing.
     /// Supports both compressed ("LZFSE:") and legacy raw formats.
-    nonisolated func decodeDrawing(from base64String: String) throws -> PKDrawing {
-        var base64 = base64String
-        var isCompressed = false
-        
-        if base64String.hasPrefix("LZFSE:") {
-            base64 = String(base64String.dropFirst(6))
-            isCompressed = true
-        }
-        
-        guard let data = Data(base64Encoded: base64) else {
-            throw NotionServiceError.decodingFailed("Invalid Base64 string")
-        }
-        
-        if isCompressed {
-            do {
-                let decompressed = try (data as NSData).decompressed(using: .lzfse)
-                return try PKDrawing(data: decompressed as Data)
-            } catch {
-                throw NotionServiceError.decodingFailed("Decompression failed: \(error.localizedDescription)")
+    nonisolated func decodeDrawing(from base64String: String) async throws -> PKDrawing {
+        return try await Task.detached(priority: .userInitiated) {
+            var base64 = base64String
+            var isCompressed = false
+
+            if base64String.hasPrefix("LZFSE:") {
+                base64 = String(base64String.dropFirst(6))
+                isCompressed = true
             }
-        }
-        
-        return try PKDrawing(data: data)
+
+            guard let data = Data(base64Encoded: base64) else {
+                throw NotionServiceError.decodingFailed("Invalid Base64 string")
+            }
+
+            if isCompressed {
+                do {
+                    let decompressed = try (data as NSData).decompressed(using: .lzfse)
+                    return try PKDrawing(data: decompressed as Data)
+                } catch {
+                    throw NotionServiceError.decodingFailed("Decompression failed: \(error.localizedDescription)")
+                }
+            }
+
+            return try PKDrawing(data: data)
+        }.value
     }
     
     /// Splits a string into chunks of standard Notion limit (2000 chars).
