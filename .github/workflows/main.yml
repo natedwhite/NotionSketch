@@ -1,0 +1,40 @@
+name: Build Unsigned IPA
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build .app
+        run: |
+          xcodebuild build \
+            -project NotionSketch.xcodeproj \
+            -scheme NotionSketch \
+            -configuration Release \
+            -derivedDataPath build \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package into IPA
+        run: |
+          mkdir -p Payload
+          # Copy the built .app into the Payload folder
+          cp -r build/Build/Products/Release-iphoneos/NotionSketch.app Payload/
+          # Zip it up into an IPA
+          zip -r NotionSketch.ipa Payload
+
+      - name: Create Release and Upload IPA
+        uses: softprops/action-gh-release@v2
+        with:
+          files: NotionSketch.ipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
