@@ -317,6 +317,7 @@ private struct SyncedFrom: Encodable {
 actor NotionService {
 
     private let session: URLSession
+    private var databaseTitlePropertyNames: [String: String] = [:]
 
     init(session: URLSession? = nil) {
         if let session = session {
@@ -544,6 +545,10 @@ actor NotionService {
     /// Retrieves the database and finds the name of the title property.
     /// Notion databases always have exactly one title property, but its name varies.
     private func getDatabaseTitlePropertyName(databaseID: String) async throws -> String {
+        if let cachedName = databaseTitlePropertyNames[databaseID] {
+            return cachedName
+        }
+
         guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
             throw NotionServiceError.invalidURL
         }
@@ -562,9 +567,9 @@ actor NotionService {
         }
 
         // Find the property whose type is "title"
-        // Find the property whose type is "title"
         for (name, property) in decoded.properties ?? [:] {
             if property.type == "title" {
+                databaseTitlePropertyNames[databaseID] = name
                 return name
             }
         }
