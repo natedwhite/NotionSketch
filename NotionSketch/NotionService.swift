@@ -75,10 +75,31 @@ private struct RelationConfig: Decodable {
     let database_id: String?
 }
 
+struct RemotePageDetails: Sendable {
+    let id: String
+    let title: String
+    let icon: String?
+    let connectedIDs: [String]
+    let drawingEncoded: String?
+}
+
+private struct QueryDatabaseResponse: Decodable {
+    let results: [PageDetailsResponse]
+    let hasMore: Bool
+    let nextCursor: String?
+
+    enum CodingKeys: String, CodingKey {
+        case results
+        case hasMore = "has_more"
+        case nextCursor = "next_cursor"
+    }
+}
+
 private struct PageDetailsResponse: Decodable {
     let id: String
     let properties: [String: PageProperty]
     let icon: NotionIcon?
+    let archived: Bool
 }
 
 private struct NotionIcon: Decodable {
@@ -1195,18 +1216,21 @@ actor NotionService {
             throw NotionServiceError.decodingFailed("fetchPage: \(error.localizedDescription) — raw: \(raw.prefix(300))")
         }
         
-        // Find title property and connected pages relation
+        let details = extractDetails(from: decoded)
+        return (details.title, details.icon, details.connectedIDs, details.drawingEncoded)
+    }
+
+    private func extractDetails(from page: PageDetailsResponse) -> RemotePageDetails {
         var title = "Untitled"
         var connectedIDs: [String] = []
         var drawingEncoded: String? = nil
         
-        for (key, property) in decoded.properties {
+        for (key, property) in page.properties {
             if property.type == "title", let titleObjects = property.title {
                 title = titleObjects.map { $0.text.content }.joined()
             } else if property.type == "relation", key == "Connected Pages", let relations = property.relation {
                 connectedIDs = relations.map { $0.id }
             } else if property.type == "rich_text", key == "Drawing Encode", let richTexts = property.rich_text {
-                // Determine if there is content
                 let fullText = richTexts.map { $0.text.content }.joined()
                 if !fullText.isEmpty {
                     drawingEncoded = fullText
@@ -1214,7 +1238,13 @@ actor NotionService {
             }
         }
         
-        return (title, decoded.icon?.value, connectedIDs, drawingEncoded)
+        return RemotePageDetails(
+            id: page.id,
+            title: title,
+            icon: page.icon?.value,
+            connectedIDs: connectedIDs,
+            drawingEncoded: drawingEncoded
+        )
     }
     
     // MARK: - Archive (Trash) a Page
@@ -1240,9 +1270,9 @@ actor NotionService {
     
     // MARK: - Fetch Active Page IDs (for deletion sync)
     
-    /// Queries the database and returns a set of non-archived page IDs.
-    /// Used to detect pages deleted/archived in Notion.
-    func fetchActivePageIDs() async throws -> Set<String> {
+    /// Queries the database and returns details for all non-archived pages.
+    /// Used to detect pages deleted/archived in Notion and fetch metadata for import.
+    func fetchActivePages() async throws -> [RemotePageDetails] {
         let rawDatabaseID = await getDatabaseID()
         let databaseID = rawDatabaseID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !databaseID.isEmpty else {
@@ -1250,13 +1280,13 @@ actor NotionService {
         }
         
         let urlString = "\(NotionConfig.baseURL)/databases/\(databaseID)/query"
-        SyncLogger.log("🔍 fetchActivePageIDs URL: \(urlString)")
+        SyncLogger.log("🔍 fetchActivePages URL: \(urlString)")
         
         guard let url = URL(string: urlString) else {
             throw NotionServiceError.invalidURL
         }
         
-        var allPageIDs = Set<String>()
+        var allPages: [RemotePageDetails] = []
         var hasMore = true
         var startCursor: String? = nil
         
@@ -1273,28 +1303,29 @@ actor NotionService {
             
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
             
-            let (data, response) = try await safeRequest(request, context: "fetchActivePageIDs")
+            let (data, response) = try await safeRequest(request, context: "fetchActivePages")
             let validatedData = try validate(data, response)
             
-            guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
-                  let results = json["results"] as? [[String: Any]] else {
-                break
+            let decoded: QueryDatabaseResponse
+            do {
+                decoded = try JSONDecoder().decode(QueryDatabaseResponse.self, from: validatedData)
+            } catch {
+                let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
+                throw NotionServiceError.decodingFailed("fetchActivePages: \(error.localizedDescription) — raw: \(raw.prefix(300))")
             }
             
-            for page in results {
-                if let id = page["id"] as? String,
-                   let archived = page["archived"] as? Bool,
-                   !archived {
-                    allPageIDs.insert(id)
+            for page in decoded.results {
+                if !page.archived {
+                    allPages.append(extractDetails(from: page))
                 }
             }
             
-            hasMore = (json["has_more"] as? Bool) ?? false
-            startCursor = json["next_cursor"] as? String
+            hasMore = decoded.hasMore
+            startCursor = decoded.nextCursor
         }
         
-        SyncLogger.log("📋 Fetched \(allPageIDs.count) active pages from Notion")
-        return allPageIDs
+        SyncLogger.log("📋 Fetched \(allPages.count) active pages from Notion")
+        return allPages
     }
     
 
