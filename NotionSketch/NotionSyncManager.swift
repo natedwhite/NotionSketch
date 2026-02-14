@@ -399,8 +399,7 @@ final class NotionSyncManager {
                         let newSketch = SketchDocument(
                             title: title.isEmpty ? "Imported Sketch" : title,
                             drawingData: drawingData,
-                            notionPageID: remoteID,
-                            cachedDrawing: drawing
+                            notionPageID: remoteID
                         )
                         newSketch.connectedPageIDs = connectedIDs
                         newSketch.updateThumbnail() // Generate thumbnail

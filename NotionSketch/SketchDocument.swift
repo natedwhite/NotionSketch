@@ -24,13 +24,11 @@ final class SketchDocument {
         title: String = "Untitled Sketch",
         drawingData: Data = Data(),
         notionPageID: String? = nil,
-        syncedBlockID: String? = nil,
-        cachedDrawing: PKDrawing? = nil
+        syncedBlockID: String? = nil
     ) {
         self.id = UUID()
         self.title = title
         self.drawingData = drawingData
-        self._cachedDrawing = cachedDrawing
         self.notionPageID = notionPageID
         self.syncedBlockID = syncedBlockID
         self.createdAt = Date()
@@ -42,26 +40,13 @@ final class SketchDocument {
 
     // MARK: - Drawing Convenience
 
-    @Transient
-    private var _cachedDrawing: PKDrawing?
-
     /// Deserializes the stored data into a `PKDrawing`.
     var drawing: PKDrawing {
         get {
-            if let cached = _cachedDrawing {
-                return cached
-            }
-            let newDrawing: PKDrawing
-            if drawingData.isEmpty {
-                newDrawing = PKDrawing()
-            } else {
-                newDrawing = (try? PKDrawing(data: drawingData)) ?? PKDrawing()
-            }
-            _cachedDrawing = newDrawing
-            return newDrawing
+            guard !drawingData.isEmpty else { return PKDrawing() }
+            return (try? PKDrawing(data: drawingData)) ?? PKDrawing()
         }
         set {
-            _cachedDrawing = newValue
             drawingData = newValue.dataRepresentation()
         }
     }
