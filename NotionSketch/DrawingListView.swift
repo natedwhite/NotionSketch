@@ -22,33 +22,19 @@ struct DrawingListView: View {
     
     private let notionService = NotionService()
     
-    private enum Formatters {
-        static let filterDate: DateFormatter = {
-            let formatter = DateFormatter()
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            return formatter
-        }()
-
-        static let creationDate: DateFormatter = {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "MM/dd/yyyy h:mm a"
-            return formatter
-        }()
-    }
-
     // Filtered Sketches
     var filteredSketches: [SketchDocument] {
         if searchText.isEmpty {
             return sketches
         }
-        let formatter = Formatters.filterDate
-
         return sketches.filter { sketch in
             // Title match
             if sketch.title.localizedCaseInsensitiveContains(searchText) { return true }
             
             // Date match
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
             if formatter.string(from: sketch.createdAt).localizedCaseInsensitiveContains(searchText) { return true }
             
             // Connected Pages match
@@ -174,7 +160,9 @@ struct DrawingListView: View {
     // MARK: - Actions
 
     private func createNewSketch() {
-        let dateString = Formatters.creationDate.string(from: Date())
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM/dd/yyyy h:mm a"
+        let dateString = formatter.string(from: Date())
         let title = "Sketch \(dateString)"
         
         let sketch = SketchDocument(title: title)
