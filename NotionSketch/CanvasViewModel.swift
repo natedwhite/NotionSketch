@@ -167,7 +167,7 @@ final class CanvasViewModel {
         }
 
         let bounds = drawing.bounds
-        let padding: CGFloat = AppConstants.Thumbnail.padding
+        let padding: CGFloat = 10
 
         let imageRect = CGRect(
             x: bounds.origin.x - padding,
@@ -177,7 +177,7 @@ final class CanvasViewModel {
         )
 
         // Render at 1x scale, small size for thumbnail
-        let maxDimension: CGFloat = AppConstants.Thumbnail.maxDimension
+        let maxDimension: CGFloat = 300
         let scale = min(maxDimension / imageRect.width, maxDimension / imageRect.height, 1.0)
         let thumbnail = drawing.image(from: imageRect, scale: scale)
         document.thumbnailData = thumbnail.pngData()
