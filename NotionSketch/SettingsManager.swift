@@ -20,14 +20,22 @@ final class SettingsManager {
         static let shortIoDomain = "short_io_domain"
     }
 
+    private enum Constants {
+        static let keychainService = "com.notionsketch.auth"
+    }
+
     // MARK: - Stored Properties
 
     var apiToken: String {
-        didSet { UserDefaults.standard.set(apiToken, forKey: Keys.apiToken) }
+        didSet {
+            KeychainHelper.standard.save(apiToken, service: Constants.keychainService, account: Keys.apiToken)
+        }
     }
     
     var shortIoApiKey: String {
-        didSet { UserDefaults.standard.set(shortIoApiKey, forKey: Keys.shortIoApiKey) }
+        didSet {
+            KeychainHelper.standard.save(shortIoApiKey, service: Constants.keychainService, account: Keys.shortIoApiKey)
+        }
     }
     
     var shortIoDomain: String {
@@ -71,8 +79,24 @@ final class SettingsManager {
     // MARK: - Init
 
     private init() {
-        self.apiToken = UserDefaults.standard.string(forKey: Keys.apiToken) ?? ""
-        self.shortIoApiKey = UserDefaults.standard.string(forKey: Keys.shortIoApiKey) ?? ""
+        // Load apiToken (with migration from UserDefaults)
+        if let legacyApiToken = UserDefaults.standard.string(forKey: Keys.apiToken) {
+            self.apiToken = legacyApiToken
+            KeychainHelper.standard.save(legacyApiToken, service: Constants.keychainService, account: Keys.apiToken)
+            UserDefaults.standard.removeObject(forKey: Keys.apiToken)
+        } else {
+            self.apiToken = KeychainHelper.standard.read(service: Constants.keychainService, account: Keys.apiToken) ?? ""
+        }
+
+        // Load shortIoApiKey (with migration from UserDefaults)
+        if let legacyShortIoKey = UserDefaults.standard.string(forKey: Keys.shortIoApiKey) {
+            self.shortIoApiKey = legacyShortIoKey
+            KeychainHelper.standard.save(legacyShortIoKey, service: Constants.keychainService, account: Keys.shortIoApiKey)
+            UserDefaults.standard.removeObject(forKey: Keys.shortIoApiKey)
+        } else {
+            self.shortIoApiKey = KeychainHelper.standard.read(service: Constants.keychainService, account: Keys.shortIoApiKey) ?? ""
+        }
+
         self.shortIoDomain = UserDefaults.standard.string(forKey: Keys.shortIoDomain) ?? "short.gy"
         // Load saved database ID and put it in databaseInput
         self.databaseInput = UserDefaults.standard.string(forKey: Keys.databaseID) ?? ""
