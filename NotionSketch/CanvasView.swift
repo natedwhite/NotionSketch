@@ -8,8 +8,8 @@ import PencilKit
 class DotGridView: UIView {
     
     // Fixed pattern configuration
-    private let dotSpacing: CGFloat = 40
-    private let dotRadius: CGFloat = 1.5
+    private let dotSpacing: CGFloat = AppConstants.Canvas.dotSpacing
+    private let dotRadius: CGFloat = AppConstants.Canvas.dotRadius
     
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -65,7 +65,7 @@ class CanvasContainer: UIView {
             if !drawingBounds.isNull, !drawingBounds.isEmpty, drawingBounds.width > 0, drawingBounds.height > 0 {
                 
                 // Calculate "Zoom to Fit" scale with padding
-                let padding: CGFloat = 50
+                let padding: CGFloat = AppConstants.Canvas.fitPadding
                 let availableWidth = bounds.width - (padding * 2)
                 let availableHeight = bounds.height - (padding * 2)
                 
@@ -90,11 +90,11 @@ class CanvasContainer: UIView {
             } else {
                 // 2. Default: Center the vast canvas
                 // Reset zoom to sensible default
-                if cv.zoomScale < 0.5 { cv.zoomScale = 0.5 } 
+                if cv.zoomScale < AppConstants.Canvas.defaultZoom { cv.zoomScale = AppConstants.Canvas.defaultZoom }
                 
                 cv.contentOffset = CGPoint(
-                    x: (DrawingCanvas.canvasSize * cv.zoomScale - bounds.width) / 2,
-                    y: (DrawingCanvas.canvasSize * cv.zoomScale - bounds.height) / 2
+                    x: (AppConstants.Canvas.size * cv.zoomScale - bounds.width) / 2,
+                    y: (AppConstants.Canvas.size * cv.zoomScale - bounds.height) / 2
                 )
             }
             
@@ -111,7 +111,7 @@ class CanvasContainer: UIView {
             let deltaX = currentOrigin.x - lastOrigin.x
             let deltaY = currentOrigin.y - lastOrigin.y
             
-            if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
+            if abs(deltaX) > AppConstants.Canvas.stabilizationThreshold || abs(deltaY) > AppConstants.Canvas.stabilizationThreshold {
                 var off = cv.contentOffset
                 off.x += deltaX
                 off.y += deltaY
@@ -154,10 +154,6 @@ class CanvasContainer: UIView {
 /// - 2-finger undo, 3-finger redo
 struct DrawingCanvas: UIViewRepresentable {
 
-    // Drawable canvas size — large enough to feel infinite.
-    // Memory-safe because the dot grid is a separate sibling view.
-    static let canvasSize: CGFloat = 8000
-
     @Binding var drawing: PKDrawing
     var onDrawingChanged: (PKDrawing) -> Void
 
@@ -178,8 +174,8 @@ struct DrawingCanvas: UIViewRepresentable {
 
         // Large drawable area
         canvasView.contentSize = CGSize(
-            width: DrawingCanvas.canvasSize,
-            height: DrawingCanvas.canvasSize
+            width: AppConstants.Canvas.size,
+            height: AppConstants.Canvas.size
         )
         canvasView.contentInsetAdjustmentBehavior = .never
 
@@ -189,8 +185,8 @@ struct DrawingCanvas: UIViewRepresentable {
         canvasView.scrollsToTop = false
 
         // Zoom
-        canvasView.minimumZoomScale = 0.2
-        canvasView.maximumZoomScale = 3.0
+        canvasView.minimumZoomScale = AppConstants.Canvas.minZoom
+        canvasView.maximumZoomScale = AppConstants.Canvas.maxZoom
         canvasView.bouncesZoom = true
 
         // Load drawing
@@ -366,7 +362,7 @@ struct CanvasView: View {
                     ))
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: viewModel.syncState)
+        .animation(.easeInOut(duration: AppConstants.Canvas.animationDuration), value: viewModel.syncState)
         .navigationTitle($viewModel.document.title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

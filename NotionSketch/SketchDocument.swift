@@ -67,7 +67,7 @@ final class SketchDocument {
         }
         
         // Add some padding
-        let padding: CGFloat = 20
+        let padding: CGFloat = AppConstants.Thumbnail.documentPadding
         let imageRect = CGRect(
             x: bounds.origin.x - padding,
             y: bounds.origin.y - padding,
