@@ -136,8 +136,20 @@ final class NotionSyncManager {
 
             // 1. Generate Image & Encoding
             step = "imageGeneration"
-            let image = drawingToImage(document.drawing)
-            let drawingEncoding = try? notionService.encodeDrawing(document.drawing)
+
+            // Capture drawing data locally to ensure thread safety when passing to detached tasks
+            let drawing = document.drawing
+
+            let imageTask = Task.detached(priority: .userInitiated) {
+                return self.drawingToImage(drawing)
+            }
+
+            let encodingTask = Task.detached(priority: .userInitiated) {
+                return try? self.notionService.encodeDrawing(drawing)
+            }
+
+            let image = await imageTask.value
+            let drawingEncoding = await encodingTask.value
             
             // 2. OCR
             step = "ocr"
@@ -243,7 +255,7 @@ final class NotionSyncManager {
     
     // MARK: - Helpers
     
-    private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
+    nonisolated private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
         let bounds = drawing.bounds
         let padding: CGFloat = AppConstants.Sync.imagePadding
         let imageRect = CGRect(
