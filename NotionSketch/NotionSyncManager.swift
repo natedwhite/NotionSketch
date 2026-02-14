@@ -126,7 +126,7 @@ final class NotionSyncManager {
                 if let remoteEncoding = try? await notionService.fetchPageBlocks(pageID: existingPageID),
                    !remoteEncoding.isEmpty {
                     
-                    let localEncoding = try? await notionService.encodeDrawing(document.drawing)
+                    let localEncoding = try? notionService.encodeDrawing(document.drawing)
                     if let local = localEncoding, local != remoteEncoding {
                         // Conflict / Diff detected.
                         // Currently prioritizing LOCAL PUSH.
@@ -137,7 +137,7 @@ final class NotionSyncManager {
             // 1. Generate Image & Encoding
             step = "imageGeneration"
             let image = drawingToImage(document.drawing)
-            let drawingEncoding = try? await notionService.encodeDrawing(document.drawing)
+            let drawingEncoding = try? notionService.encodeDrawing(document.drawing)
             
             // 2. OCR
             step = "ocr"
@@ -315,7 +315,7 @@ final class NotionSyncManager {
              
              // Fetch Drawing Data (Block)
              if let encoding = try await notionService.fetchPageBlocks(pageID: pageID), !encoding.isEmpty {
-                 let newDrawing = try await notionService.decodeDrawing(from: encoding)
+                 let newDrawing = try notionService.decodeDrawing(from: encoding)
                  await MainActor.run {
                      document.drawing = newDrawing
                      document.updateThumbnail()
@@ -392,7 +392,7 @@ final class NotionSyncManager {
                         }
                         
                         // C. Decode & Import
-                        let drawing = try await notionService.decodeDrawing(from: drawingEncoded)
+                        let drawing = try notionService.decodeDrawing(from: drawingEncoded)
                         let drawingData = drawing.dataRepresentation()
                         
                         // Create new document
