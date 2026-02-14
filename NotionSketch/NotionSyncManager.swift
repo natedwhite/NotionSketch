@@ -136,16 +136,28 @@ final class NotionSyncManager {
 
             // 1. Generate Image & Encoding
             step = "imageGeneration"
-            let image = drawingToImage(document.drawing)
-            let drawingEncoding = try? await notionService.encodeDrawing(document.drawing)
+
+            // Capture drawing data locally to ensure thread safety when passing to detached tasks
+            let drawing = document.drawing
+
+            // Start synchronous image generation on background thread
+            async let image = Task.detached(priority: .userInitiated) {
+                return self.drawingToImage(drawing)
+            }.value
+
+            // Start encoding (which is already async and detached in Service)
+            async let drawingEncoding = try? notionService.encodeDrawing(drawing)
+
+            // Await parallel tasks together
+            let (finalImage, finalEncoding) = await (image, drawingEncoding)
             
             // 2. OCR
             step = "ocr"
-            let recognizedText = await recognizeText(in: image)
+            let recognizedText = await recognizeText(in: finalImage)
             
             // 3. Upload Image
             step = "uploadImage"
-            let fileUploadID = try await notionService.uploadDrawingImage(image)
+            let fileUploadID = try await notionService.uploadDrawingImage(finalImage)
             
             // 4. Update/Create Page (Metadata Only)
             let pageID: String
@@ -199,7 +211,7 @@ final class NotionSyncManager {
             }
             
             // 6. Update Drawing Data (Page Body Code Block)
-            if let encoding = drawingEncoding {
+            if let encoding = finalEncoding {
                 step = "updateDrawingData"
                 try await notionService.updatePageContent(pageID: pageID, drawingString: encoding)
             }
@@ -243,7 +255,7 @@ final class NotionSyncManager {
     
     // MARK: - Helpers
     
-    private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
+    nonisolated private func drawingToImage(_ drawing: PKDrawing) -> UIImage {
         let bounds = drawing.bounds
         let padding: CGFloat = AppConstants.Sync.imagePadding
         let imageRect = CGRect(
