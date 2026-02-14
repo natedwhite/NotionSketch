@@ -148,6 +148,7 @@ final class NotionSyncManager {
                 return try? self.notionService.encodeDrawing(drawing)
             }
 
+            // Await parallel tasks
             let image = await imageTask.value
             let drawingEncoding = await encodingTask.value
             
