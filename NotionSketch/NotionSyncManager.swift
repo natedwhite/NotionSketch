@@ -139,13 +139,22 @@ final class NotionSyncManager {
             let image = drawingToImage(document.drawing)
             let drawingEncoding = try? notionService.encodeDrawing(document.drawing)
             
-            // 2. OCR
+            // 2. OCR (run concurrently)
             step = "ocr"
-            let recognizedText = await recognizeText(in: image)
+            let textRecognitionTask = Task {
+                await recognizeText(in: image)
+            }
             
-            // 3. Upload Image
+            // 3. Upload Image (run concurrently)
             step = "uploadImage"
-            let fileUploadID = try await notionService.uploadDrawingImage(image)
+            let imageUploadTask = Task {
+                try await notionService.uploadDrawingImage(image)
+            }
+            
+            // --- Await results ---
+            let recognizedText = await textRecognitionTask.value
+            let fileUploadID = try await imageUploadTask.value
+
             
             // 4. Update/Create Page (Metadata Only)
             let pageID: String
