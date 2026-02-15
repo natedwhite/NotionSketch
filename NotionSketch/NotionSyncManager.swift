@@ -439,13 +439,16 @@ final class NotionSyncManager {
                                 return nil
                             }
                         }
-                    }
-                }
-                
-                // Await remaining tasks
-                for await importedData in group {
-                    if let data = importedData {
-                        importedSketchData.append(data)
+                    } else {
+                        // 4. Update existing? (Optional: Sync Title if changed)
+                        if let existing = localMap[normalizedRemote] {
+                            Task {
+                                guard let (title, _, _, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
+                                if !title.isEmpty && title != existing.title {
+                                    existing.title = title
+                                }
+                            }
+                        }
                     }
                 }
             }
