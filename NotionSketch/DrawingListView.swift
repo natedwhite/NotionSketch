@@ -22,12 +22,16 @@ struct DrawingListView: View {
     
     private let notionService = NotionService()
     
+    @State private var filteredSketches: [SketchDocument] = []
+
     // Filtered Sketches
-    var filteredSketches: [SketchDocument] {
+    private func updateFilteredSketches() {
         if searchText.isEmpty {
-            return sketches
+            filteredSketches = sketches.map { $0 }
+            return
         }
-        return sketches.filter { sketch in
+        
+        filteredSketches = sketches.filter { sketch in
             // Title match
             if sketch.title.localizedCaseInsensitiveContains(searchText) { return true }
             
@@ -52,6 +56,9 @@ struct DrawingListView: View {
                 sketchGrid
             }
         }
+        .onAppear(perform: updateFilteredSketches)
+        .onChange(of: sketches, perform: { _ in updateFilteredSketches() })
+        .onChange(of: searchText, perform: { _ in updateFilteredSketches() })
         .navigationTitle("NotionSketch")
         .searchable(text: $searchText, placement: .sidebar, prompt: "Search sketches, dates, or links")
         .toolbar {
