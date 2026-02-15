@@ -505,19 +505,34 @@ struct ConnectedPagesSheet: View {
             .task(id: searchQuery) {
                 guard !searchQuery.isEmpty else {
                     searchResults = []
+                    isSearching = false // Ensure loading state is turned off for empty query
                     return
                 }
-                
-                // Debounce
+
+                // Immediately indicate that a search process has started.
+                isSearching = true
+
+                // DEBOUNCE: Wait for 300ms of inactivity.
                 do {
-                    isSearching = true
-                    try await Task.sleep(for: .milliseconds(500))
-                    let results = await viewModel.searchPages(query: searchQuery)
-                    searchResults = results
-                    isSearching = false
+                    try await Task.sleep(for: .milliseconds(300))
                 } catch {
-                    // Canceled
+                    // Task was cancelled (user typed again), so exit.
+                    // The new task will have already set isSearching = true.
+                    return
                 }
+
+                // Check for cancellation after the sleep.
+                guard !Task.isCancelled else { return }
+
+                // Now perform the actual search.
+                let results = await viewModel.searchPages(query: searchQuery)
+                
+                // Final check for cancellation after the network call.
+                guard !Task.isCancelled else { return }
+
+                // Update UI with results.
+                searchResults = results
+                isSearching = false
             }
         }
     }
