@@ -543,7 +543,15 @@ actor NotionService {
 
     /// Retrieves the database and finds the name of the title property.
     /// Notion databases always have exactly one title property, but its name varies.
+    private var databaseTitlePropertyNameCache: [String: String] = [:]
+
+    /// Retrieves the database and finds the name of the title property.
+    /// Notion databases always have exactly one title property, but its name varies.
     private func getDatabaseTitlePropertyName(databaseID: String) async throws -> String {
+        if let cached = databaseTitlePropertyNameCache[databaseID] {
+            return cached
+        }
+
         guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
             throw NotionServiceError.invalidURL
         }
@@ -562,9 +570,9 @@ actor NotionService {
         }
 
         // Find the property whose type is "title"
-        // Find the property whose type is "title"
         for (name, property) in decoded.properties ?? [:] {
             if property.type == "title" {
+                databaseTitlePropertyNameCache[databaseID] = name
                 return name
             }
         }
