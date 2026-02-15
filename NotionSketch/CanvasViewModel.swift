@@ -166,6 +166,13 @@ final class CanvasViewModel {
             return
         }
 
+        let oldBounds = document.drawing.bounds
+        let newBounds = drawing.bounds
+
+        if oldBounds == newBounds && document.thumbnailData != nil {
+            return
+        }
+
         let bounds = drawing.bounds
         let padding: CGFloat = 10
 
