@@ -377,67 +377,100 @@ final class NotionSyncManager {
                 }
             }
             
-            // 3. Process Imports (Remote ID exists, but no local sketch)
-            var importedCount = 0
-            for remoteID in activePageIDs {
-                let normalizedRemote = remoteID.replacingOccurrences(of: "-", with: "").lowercased()
-                
-                if localMap[normalizedRemote] == nil {
-                    // This is a new/restored page from Notion!
-                    SyncLogger.log("📥 Found new/restored page \(remoteID) — importing...")
+                        // 3. Process Imports (Remote ID exists, but no local sketch)
+            struct ImportedSketchData: Sendable {
+                let title: String
+                let drawingData: Data
+                let notionPageID: String
+                let connectedPageIDs: [String]
+            }
+            
+            var importedSketchData: [ImportedSketchData] = []
+            await withTaskGroup(of: ImportedSketchData?.self) { group in
+                let maxConcurrentTasks = 3
+                var runningTasks = 0
+
+                for remoteID in activePageIDs {
+                    let normalizedRemote = remoteID.replacingOccurrences(of: "-", with: "").lowercased()
                     
-                    do {
-                        // A. Fetch Details
-                        guard let (title, _, connectedIDs, _) = try await notionService.fetchPageDetails(pageID: remoteID) else {
-                            SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
-                            continue
+                    if localMap[normalizedRemote] == nil {
+                        if runningTasks >= maxConcurrentTasks {
+                            if let importedData = await group.next() {
+                                if let data = importedData {
+                                    importedSketchData.append(data)
+                                }
+                            }
+                            runningTasks -= 1
                         }
                         
-                        // B. Fetch Drawing Data (Body)
-                        guard let drawingEncoded = try await notionService.fetchPageBlocks(pageID: remoteID),
-                              !drawingEncoded.isEmpty else {
-                            SyncLogger.log("ℹ️ Page \(remoteID) has no drawing data (in body) to import.")
-                            continue
+                        runningTasks += 1
+                        group.addTask {
+                            SyncLogger.log("📥 Found new/restored page \(remoteID) — importing...")
+                            
+                            do {
+                                // A. Fetch Details
+                                guard let (title, _, connectedIDs, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
+                                    SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
+                                    return nil
+                                }
+                                
+                                // B. Fetch Drawing Data (Body)
+                                guard let drawingEncoded = try await self.notionService.fetchPageBlocks(pageID: remoteID),
+                                      !drawingEncoded.isEmpty else {
+                                    SyncLogger.log("ℹ️ Page \(remoteID) has no drawing data (in body) to import.")
+                                    return nil
+                                }
+                                
+                                // C. Decode & Import
+                                let drawing = try self.notionService.decodeDrawing(from: drawingEncoded)
+                                let drawingData = drawing.dataRepresentation()
+                                
+                                let newSketchData = ImportedSketchData(
+                                    title: title.isEmpty ? "Imported Sketch" : title,
+                                    drawingData: drawingData,
+                                    notionPageID: remoteID,
+                                    connectedPageIDs: connectedIDs
+                                )
+                                SyncLogger.log("✅ Imported '\(newSketchData.title)'")
+                                return newSketchData
+                                
+                            } catch {
+                                SyncLogger.log("❌ Failed to import page \(remoteID): \(error.localizedDescription)")
+                                return nil
+                            }
                         }
-                        
-                        // C. Decode & Import
-                        let drawing = try notionService.decodeDrawing(from: drawingEncoded)
-                        let drawingData = drawing.dataRepresentation()
-                        
-                        // Create new document
-                        let newSketch = SketchDocument(
-                            title: title.isEmpty ? "Imported Sketch" : title,
-                            drawingData: drawingData,
-                            notionPageID: remoteID
-                        )
-                        newSketch.connectedPageIDs = connectedIDs
-                        newSketch.updateThumbnail() // Generate thumbnail
-                        
-                        context.insert(newSketch)
-                        importedCount += 1
-                        SyncLogger.log("✅ Imported '\(newSketch.title)'")
-                        
-                        // Add a small delay to be nice to the API
-                        try await Task.sleep(for: .milliseconds(100))
-                        
-                    } catch {
-                        SyncLogger.log("❌ Failed to import page \(remoteID): \(error.localizedDescription)")
                     }
-                } else {
-                    // 4. Update existing? (Optional: Sync Title if changed)
-                    // We could do this here lightly.
-                    if let existing = localMap[normalizedRemote] {
-                         // We won't pull full body here to save bandwidth, just ensure alignment if needed.
-                         // For now, let's leave body sync to "Pull" or open.
+                }
+                
+                // Await remaining tasks
+                for await importedData in group {
+                    if let data = importedData {
+                        importedSketchData.append(data)
                     }
                 }
             }
+            
+            // 4. Insert imported sketches
+            for data in importedSketchData {
+                let newSketch = SketchDocument(
+                    title: data.title,
+                    drawingData: data.drawingData,
+                    notionPageID: data.notionPageID
+                )
+                newSketch.connectedPageIDs = data.connectedPageIDs
+                newSketch.updateThumbnail() // Generate thumbnail
+                context.insert(newSketch)
+            }
+            
+            let importedCount = importedSketchData.count
             
             if deletedCount > 0 || importedCount > 0 {
                 SyncLogger.log("✅ Library Sync Complete: \(deletedCount) deleted, \(importedCount) imported.")
             } else {
                 SyncLogger.log("✅ Library Sync Complete: Up to date.")
             }
+            
+            
             
         } catch {
             SyncLogger.log("⚠️ Library Sync Failed: \(error.localizedDescription)")
