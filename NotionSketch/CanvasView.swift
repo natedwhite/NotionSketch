@@ -111,7 +111,7 @@ class CanvasContainer: UIView {
             let deltaX = currentOrigin.x - lastOrigin.x
             let deltaY = currentOrigin.y - lastOrigin.y
             
-            if abs(deltaX) > 0.1 || abs(deltaY) > 0.1 {
+            if abs(deltaX) > 1.0 || abs(deltaY) > 1.0 {
                 var off = cv.contentOffset
                 off.x += deltaX
                 off.y += deltaY
