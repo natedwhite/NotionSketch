@@ -30,16 +30,16 @@ struct SettingsView: View {
 
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("Database", systemImage: "tray.full.fill")
+                        Label("Sketches Container", systemImage: "tray.full.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.secondary)
 
-                        TextField("Paste database URL or ID…", text: $settings.databaseInput)
+                        TextField("Paste database or data source URL…", text: $settings.containerInput)
                             .font(.system(.body, design: .monospaced))
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
 
-                        if !settings.databaseID.isEmpty && settings.databaseInput != settings.databaseID {
+                        if !settings.databaseID.isEmpty && settings.containerInput != settings.databaseID {
                             HStack(spacing: 4) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundStyle(.green)
@@ -52,7 +52,7 @@ struct SettingsView: View {
                     }
                     .padding(.vertical, 4)
                 } footer: {
-                    Text("Paste the full Notion database URL — the database ID will be extracted automatically. Make sure your integration is connected to this database.")
+                    Text("Paste the full Notion database or data source URL — the ID will be extracted automatically. Make sure your integration is connected.")
                 }
                 
                 Section {

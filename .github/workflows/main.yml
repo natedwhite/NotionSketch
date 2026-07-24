@@ -12,6 +12,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Install Tuist
+        run: brew install --cask tuist
+
+      - name: Generate Xcode project
+        run: tuist generate
+
       - name: Build .app
         run: |
           xcodebuild build \

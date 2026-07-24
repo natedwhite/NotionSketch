@@ -66,36 +66,84 @@ final class CanvasViewModel {
     var document: SketchDocument
 
     // MARK: - Private Properties
-    
+
     private var targetDatabaseID: String? = nil
     private let notionService = NotionService()
+
+    // MARK: - Whiteboard Bridge
+
+    /// Lazily-created whiteboard state layer. Not used by current canvas interaction;
+    /// provided for later tasks that manage objects, z-ordering, and multi-layer rendering.
+    private var _whiteboardViewModel: WhiteboardViewModel?
+    var whiteboardViewModel: WhiteboardViewModel {
+        if _whiteboardViewModel == nil {
+            _whiteboardViewModel = WhiteboardViewModel(document: document)
+        }
+        return _whiteboardViewModel!
+    }
 
     // MARK: - Init
 
     init(document: SketchDocument) {
         self.document = document
-        self.currentDrawing = document.drawing
+        // Use effectiveDrawingForLegacyCanvas so that when contentVersion == 1,
+        // the PKCanvasView renders the freehand layer from the whiteboard document.
+        self.currentDrawing = document.effectiveDrawingForLegacyCanvas
     }
 
     // MARK: - Drawing Changed (Debounce Entry Point)
 
     /// Called every time `PKCanvasView` reports a drawing change.
     /// Saves locally immediately, then requests a background sync via Manager.
+    ///
+    /// When `contentVersion == 0` (legacy), persists directly to `document.drawing`.
+    /// When `contentVersion == 1` (whiteboard), updates the freehandPencilKit object
+    /// inside `document.whiteboard` and encodes it back to JSON.
     func drawingDidChange(_ drawing: PKDrawing) {
         currentDrawing = drawing
 
-        // Persist to SwiftData immediately (local save is cheap)
-        document.drawing = drawing
+        if document.contentVersion == 0 {
+            // Legacy path: persist PKDrawing directly, exactly as before.
+            document.drawing = drawing
+        } else {
+            // Whiteboard path: update the freehandPencilKit object in the whiteboard document.
+            // PKCanvasView remains the "freehand layer" — a layered whiteboard renderer arrives in later tasks.
+            var wbDoc = document.whiteboard ?? WhiteboardDocument()
+
+            // Find the first .freehandPencilKit object by render order
+            let freehandIndex = wbDoc.objects.firstIndex { obj in
+                if case .freehandPencilKit = obj.kind { return true }
+                return false
+            }
+
+            let base64 = drawing.dataRepresentation().base64EncodedString()
+
+            if let idx = freehandIndex {
+                // Replace the drawing data in the existing freehand object.
+                wbDoc.objects[idx].kind = .freehandPencilKit(drawingDataBase64: base64)
+            } else {
+                // No freehand object yet — append one at the bottom z-index with default geometry.
+                let newObj = WhiteboardObject(
+                    kind: .freehandPencilKit(drawingDataBase64: base64),
+                    zIndex: WhiteboardZIndex.bottomZIndex(of: wbDoc.objects),
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 100
+                )
+                wbDoc.objects.append(newObj)
+            }
+
+            document.whiteboard = wbDoc
+        }
+
         updateThumbnail(from: drawing)
-        
+
         // Don't sync if the canvas is empty
         guard !drawing.strokes.isEmpty else { return }
 
         // Don't sync if not configured
         guard SettingsManager.shared.isConfigured else {
-            // Error state handled elsewhere or show alert?
-            // syncState is computed now. We can't set it easily.
-            // NotionSyncManager will error if called.
             return
         }
 

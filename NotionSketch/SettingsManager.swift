@@ -14,7 +14,8 @@ final class SettingsManager {
 
     private enum Keys {
         static let apiToken = "notion_api_token"
-        static let databaseID = "notion_database_id"
+        static let databaseID = "notion_database_id" // Legacy key, migrated to containerInput
+        static let containerInput = "notion_container_input"
         static let connectedPagesDatabaseID = "notion_connected_pages_database_id"
         static let shortIoApiKey = "short_io_api_key"
         static let shortIoDomain = "short_io_domain"
@@ -34,30 +35,29 @@ final class SettingsManager {
         didSet { UserDefaults.standard.set(shortIoDomain, forKey: Keys.shortIoDomain) }
     }
 
-    /// Raw input from the user — could be a full Notion URL or just the ID.
-    var databaseInput: String {
+    /// Raw input from the user — could be a database URL, data source URL, or just an ID.
+    var containerInput: String {
         didSet {
-            let extracted = SettingsManager.extractDatabaseID(from: databaseInput)
-            UserDefaults.standard.set(extracted, forKey: Keys.databaseID)
+            UserDefaults.standard.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
         }
     }
 
-    /// The cleaned database ID (always a UUID with dashes).
+    /// The cleaned container ID (always a UUID with dashes). Used by legacy code.
     var databaseID: String {
-        SettingsManager.extractDatabaseID(from: databaseInput)
+        SettingsManager.extractContainerID(from: containerInput)
     }
     
     /// Raw input for the Connected Pages database.
     var connectedPagesDatabaseInput: String {
         didSet {
-            let extracted = SettingsManager.extractDatabaseID(from: connectedPagesDatabaseInput)
+            let extracted = SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
             UserDefaults.standard.set(extracted, forKey: Keys.connectedPagesDatabaseID)
         }
     }
     
     /// The cleaned Connected Pages database ID.
     var connectedPagesDatabaseID: String {
-        SettingsManager.extractDatabaseID(from: connectedPagesDatabaseInput)
+        SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
     }
 
     // MARK: - Computed
@@ -74,21 +74,27 @@ final class SettingsManager {
         self.apiToken = UserDefaults.standard.string(forKey: Keys.apiToken) ?? ""
         self.shortIoApiKey = UserDefaults.standard.string(forKey: Keys.shortIoApiKey) ?? ""
         self.shortIoDomain = UserDefaults.standard.string(forKey: Keys.shortIoDomain) ?? "short.gy"
-        // Load saved database ID and put it in databaseInput
-        self.databaseInput = UserDefaults.standard.string(forKey: Keys.databaseID) ?? ""
+        // Migrate old database ID key to new container input key
+        if let legacyID = UserDefaults.standard.string(forKey: Keys.databaseID), !legacyID.isEmpty {
+            if UserDefaults.standard.string(forKey: Keys.containerInput) == nil {
+                UserDefaults.standard.set(legacyID, forKey: Keys.containerInput)
+            }
+        }
+        self.containerInput = UserDefaults.standard.string(forKey: Keys.containerInput) ?? ""
         self.connectedPagesDatabaseInput = UserDefaults.standard.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
     }
 
     // MARK: - URL Parsing
 
-    /// Extracts a Notion database ID from a pasted URL or raw ID string.
+    /// Extracts a Notion container ID (database or data source) from a pasted URL or raw ID string.
     ///
     /// Supports formats like:
     /// - `https://www.notion.so/workspace/abc123def456...?v=...`
     /// - `https://notion.so/abc123def456...`
+    /// - `https://www.notion.so/workspace/data-source/Title-abc123def456...`
     /// - `abc123def456...` (raw 32-char hex)
     /// - `abc123de-f456-7890-abcd-ef1234567890` (UUID with dashes)
-    static func extractDatabaseID(from input: String) -> String {
+    static func extractContainerID(from input: String) -> String {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 

@@ -3,47 +3,78 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 55;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10000010000000000000001 /* NotionSketchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* NotionSketchApp.swift */; };
-		A10000010000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000002 /* ContentView.swift */; };
-		A10000010000000000000003 /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000003 /* CanvasView.swift */; };
-		AC96DD407F0B402C8E23AEEB /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 714AF724BA2A41CCB0EA903C /* SplashScreen.swift */; };
-		A10000010000000000000004 /* CanvasViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000004 /* CanvasViewModel.swift */; };
-		A10000010000000000000005 /* NotionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000005 /* NotionService.swift */; };
-		A10000010000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000006 /* Assets.xcassets */; };
-		1B2B6C8D12F6434FB5949385 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 4512743592DF4D28A160DC4C /* LaunchScreen.storyboard */; };
-		A10000010000000000000007 /* SketchDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000007 /* SketchDocument.swift */; };
-		A10000010000000000000008 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000008 /* SettingsManager.swift */; };
-		A10000010000000000000009 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000009 /* SettingsView.swift */; };
-		A1000001000000000000000A /* DrawingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000A /* DrawingListView.swift */; };
-		A1000001000000000000000B /* SyncLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000B /* SyncLogger.swift */; };
-		A1000001000000000000000C /* NotionSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001000000000000000C /* NotionSyncManager.swift */; };
+		10B334AF794B572D9C2E3452 /* SplashScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A7A8E87C96D930C9922DC8 /* SplashScreen.swift */; };
+		149DD5268AB1D298F9265D44 /* CanvasViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA5BD19E08CD896AA50BCA35 /* CanvasViewModel.swift */; };
+		222A0089C7322E19AD4233A9 /* SettingsManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FA97AA13B0D0A0847ED81F2 /* SettingsManager.swift */; };
+		3778925590A2822D2CB46614 /* TuistBundle+NotionSketch.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE3006C73EF42D85036C75BC /* TuistBundle+NotionSketch.swift */; };
+		3E5E3BE1D646724B6DE27E20 /* WhiteboardDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0BDA833D6ABDA43540DD772 /* WhiteboardDocument.swift */; };
+		44FEE3C1D9E827777CD1573B /* WhiteboardTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6217F9BBC685A5F8A3D9A690 /* WhiteboardTool.swift */; };
+		5331DB374D36A20C668D0BF4 /* SyncLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 471CA28803762420C166EDE7 /* SyncLogger.swift */; };
+		54A88895C7D591A7011356E2 /* DrawingListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CC92BED257DD2BE103B72FA /* DrawingListView.swift */; };
+		5DA96ED565D035D908257001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37D0E64A1EDBFDBF2E351326 /* SettingsView.swift */; };
+		6C4D8A31C37A5FBCFB04C287 /* WhiteboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD7757E167B753AC88AF8ED /* WhiteboardViewModel.swift */; };
+		6EEA974EED814A7E95BD7A64 /* WhiteboardZIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D8F232D6ABF3616FF8DA95 /* WhiteboardZIndex.swift */; };
+		7F60C89D08F22DF51DF54D8A /* TuistAssets+NotionSketch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6475D5A58003FF3DA85DF4FA /* TuistAssets+NotionSketch.swift */; };
+		8FC3D530FBA1DA9004F04E62 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */; };
+		985C1C9F731445949C8F7005 /* NotionSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */; };
+		9B23635B0925F0DF4E8E4038 /* NotionSketchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF78410589456C14456E4889 /* NotionSketchApp.swift */; };
+		AB0D27246072CE31B45A2476 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7FE01D2225DD5282AFE09E9B /* Assets.xcassets */; };
+		D0C4EAC126BA816B825AC65A /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24FFE9171787702A3F0FCD03 /* CanvasView.swift */; };
+		DA620F054C483B856F0BCC7B /* NotionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2740D8A78FB8F432E0B095 /* NotionService.swift */; };
+		F2DCFBED1B04CAA293EE1403 /* WhiteboardObjectKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0374025D071E45D008A6D930 /* WhiteboardObjectKind.swift */; };
+		F43D756FD89194C7520C10E4 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A045CF829CBF481DDA95F616 /* ContentView.swift */; };
+		FA5B312141A0EB184BD74CCB /* WhiteboardSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7502FADB300B2991D34F5C /* WhiteboardSelection.swift */; };
+		FAA5FD1B9961D248DDB88301 /* SketchDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 278E1FA4E48129FF5A1DB817 /* SketchDocument.swift */; };
+		FD68B44EBE7055639DEAFE4F /* WhiteboardObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E13BA25958DEE1A4267194 /* WhiteboardObject.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		33CBAA7F2E231DB5CE42A509 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
-		A20000010000000000000001 /* NotionSketchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSketchApp.swift; sourceTree = "<group>"; };
-		A20000010000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		A20000010000000000000003 /* CanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
-		714AF724BA2A41CCB0EA903C /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
-		A20000010000000000000004 /* CanvasViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewModel.swift; sourceTree = "<group>"; };
-		A20000010000000000000005 /* NotionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionService.swift; sourceTree = "<group>"; };
-		A20000010000000000000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		4512743592DF4D28A160DC4C /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		C173F8E1922347CBB4C3B7B8 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		A20000010000000000000007 /* SketchDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchDocument.swift; sourceTree = "<group>"; };
-		A20000010000000000000008 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
-		A20000010000000000000009 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		A2000001000000000000000A /* DrawingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingListView.swift; sourceTree = "<group>"; };
-		A2000001000000000000000B /* SyncLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncLogger.swift; sourceTree = "<group>"; };
-		A2000001000000000000000C /* NotionSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSyncManager.swift; sourceTree = "<group>"; };
-		A30000010000000000000001 /* NotionSketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotionSketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		0374025D071E45D008A6D930 /* WhiteboardObjectKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardObjectKind.swift; sourceTree = "<group>"; };
+		24FFE9171787702A3F0FCD03 /* CanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
+		26DC6B26049B81526FEF9EF5 /* NotionSketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotionSketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		278E1FA4E48129FF5A1DB817 /* SketchDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchDocument.swift; sourceTree = "<group>"; };
+		2BD7757E167B753AC88AF8ED /* WhiteboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardViewModel.swift; sourceTree = "<group>"; };
+		37D0E64A1EDBFDBF2E351326 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSyncManager.swift; sourceTree = "<group>"; };
+		471CA28803762420C166EDE7 /* SyncLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncLogger.swift; sourceTree = "<group>"; };
+		4B7502FADB300B2991D34F5C /* WhiteboardSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardSelection.swift; sourceTree = "<group>"; };
+		4FA97AA13B0D0A0847ED81F2 /* SettingsManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManager.swift; sourceTree = "<group>"; };
+		6217F9BBC685A5F8A3D9A690 /* WhiteboardTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardTool.swift; sourceTree = "<group>"; };
+		6475D5A58003FF3DA85DF4FA /* TuistAssets+NotionSketch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TuistAssets+NotionSketch.swift"; sourceTree = "<group>"; };
+		68D8F232D6ABF3616FF8DA95 /* WhiteboardZIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardZIndex.swift; sourceTree = "<group>"; };
+		7CC92BED257DD2BE103B72FA /* DrawingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingListView.swift; sourceTree = "<group>"; };
+		7FE01D2225DD5282AFE09E9B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A045CF829CBF481DDA95F616 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A0BDA833D6ABDA43540DD772 /* WhiteboardDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardDocument.swift; sourceTree = "<group>"; };
+		AD2740D8A78FB8F432E0B095 /* NotionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionService.swift; sourceTree = "<group>"; };
+		B9E13BA25958DEE1A4267194 /* WhiteboardObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardObject.swift; sourceTree = "<group>"; };
+		BA5BD19E08CD896AA50BCA35 /* CanvasViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewModel.swift; sourceTree = "<group>"; };
+		C1A7A8E87C96D930C9922DC8 /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
+		D3B6F222B69489CA8962732A /* NotionSketch-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "NotionSketch-Info.plist"; sourceTree = "<group>"; };
+		DF78410589456C14456E4889 /* NotionSketchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSketchApp.swift; sourceTree = "<group>"; };
+		FE3006C73EF42D85036C75BC /* TuistBundle+NotionSketch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TuistBundle+NotionSketch.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A40000010000000000000001 /* Frameworks */ = {
+		D6A37D74F567B8A12190C5D0 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -53,40 +84,89 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A50000010000000000000001 = {
+		0AFE612D4C16CA76753B6483 /* Derived */ = {
 			isa = PBXGroup;
 			children = (
-				A50000010000000000000002 /* NotionSketch */,
-				A50000010000000000000003 /* Products */,
+				9DCBEFD6F141D15E51F9FCFA /* InfoPlists */,
+				92C4DE8C81255F6CED5A2478 /* Sources */,
 			);
+			path = Derived;
 			sourceTree = "<group>";
 		};
-		A50000010000000000000002 /* NotionSketch */ = {
+		13CD979765411A0DE3B046EA /* Project */ = {
 			isa = PBXGroup;
 			children = (
-				A20000010000000000000001 /* NotionSketchApp.swift */,
-				A20000010000000000000002 /* ContentView.swift */,
-				A20000010000000000000003 /* CanvasView.swift */,
-				714AF724BA2A41CCB0EA903C /* SplashScreen.swift */,
-				A20000010000000000000004 /* CanvasViewModel.swift */,
-				A20000010000000000000005 /* NotionService.swift */,
-				A20000010000000000000007 /* SketchDocument.swift */,
-				A20000010000000000000008 /* SettingsManager.swift */,
-				A20000010000000000000009 /* SettingsView.swift */,
-				A2000001000000000000000A /* DrawingListView.swift */,
-				A2000001000000000000000B /* SyncLogger.swift */,
-				A2000001000000000000000C /* NotionSyncManager.swift */,
-				A20000010000000000000006 /* Assets.xcassets */,
-				4512743592DF4D28A160DC4C /* LaunchScreen.storyboard */,
-				C173F8E1922347CBB4C3B7B8 /* LaunchScreen.storyboard */,
+				0AFE612D4C16CA76753B6483 /* Derived */,
+				687FEEF3A90A6E469E38AC65 /* NotionSketch */,
+			);
+			name = Project;
+			sourceTree = "<group>";
+		};
+		687FEEF3A90A6E469E38AC65 /* NotionSketch */ = {
+			isa = PBXGroup;
+			children = (
+				BE36E455B47067EF488324A7 /* Whiteboard */,
+				7FE01D2225DD5282AFE09E9B /* Assets.xcassets */,
+				24FFE9171787702A3F0FCD03 /* CanvasView.swift */,
+				BA5BD19E08CD896AA50BCA35 /* CanvasViewModel.swift */,
+				A045CF829CBF481DDA95F616 /* ContentView.swift */,
+				7CC92BED257DD2BE103B72FA /* DrawingListView.swift */,
+				9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */,
+				AD2740D8A78FB8F432E0B095 /* NotionService.swift */,
+				DF78410589456C14456E4889 /* NotionSketchApp.swift */,
+				45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */,
+				4FA97AA13B0D0A0847ED81F2 /* SettingsManager.swift */,
+				37D0E64A1EDBFDBF2E351326 /* SettingsView.swift */,
+				278E1FA4E48129FF5A1DB817 /* SketchDocument.swift */,
+				C1A7A8E87C96D930C9922DC8 /* SplashScreen.swift */,
+				471CA28803762420C166EDE7 /* SyncLogger.swift */,
 			);
 			path = NotionSketch;
 			sourceTree = "<group>";
 		};
-		A50000010000000000000003 /* Products */ = {
+		7806C1ADA811A52FBE1B2D73 = {
 			isa = PBXGroup;
 			children = (
-				A30000010000000000000001 /* NotionSketch.app */,
+				F400E7A63D6B07AD734518AE /* Products */,
+				13CD979765411A0DE3B046EA /* Project */,
+			);
+			sourceTree = "<group>";
+		};
+		92C4DE8C81255F6CED5A2478 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				6475D5A58003FF3DA85DF4FA /* TuistAssets+NotionSketch.swift */,
+				FE3006C73EF42D85036C75BC /* TuistBundle+NotionSketch.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		9DCBEFD6F141D15E51F9FCFA /* InfoPlists */ = {
+			isa = PBXGroup;
+			children = (
+				D3B6F222B69489CA8962732A /* NotionSketch-Info.plist */,
+			);
+			path = InfoPlists;
+			sourceTree = "<group>";
+		};
+		BE36E455B47067EF488324A7 /* Whiteboard */ = {
+			isa = PBXGroup;
+			children = (
+				A0BDA833D6ABDA43540DD772 /* WhiteboardDocument.swift */,
+				B9E13BA25958DEE1A4267194 /* WhiteboardObject.swift */,
+				0374025D071E45D008A6D930 /* WhiteboardObjectKind.swift */,
+				4B7502FADB300B2991D34F5C /* WhiteboardSelection.swift */,
+				6217F9BBC685A5F8A3D9A690 /* WhiteboardTool.swift */,
+				2BD7757E167B753AC88AF8ED /* WhiteboardViewModel.swift */,
+				68D8F232D6ABF3616FF8DA95 /* WhiteboardZIndex.swift */,
+			);
+			path = Whiteboard;
+			sourceTree = "<group>";
+		};
+		F400E7A63D6B07AD734518AE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				26DC6B26049B81526FEF9EF5 /* NotionSketch.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -94,99 +174,107 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A60000010000000000000001 /* NotionSketch */ = {
+		29C0AFE8671AFA29DD3BDB61 /* NotionSketch */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = A80000010000000000000002 /* Build configuration list for PBXNativeTarget "NotionSketch" */;
+			buildConfigurationList = 3A56FC95BEC6ED7D92E414D0 /* Build configuration list for PBXNativeTarget "NotionSketch" */;
 			buildPhases = (
-				A70000010000000000000001 /* Sources */,
-				A40000010000000000000001 /* Frameworks */,
-				A90000010000000000000001 /* Resources */,
+				3D7319269296D2358D9E74F3 /* Sources */,
+				EEB4B32D134BCBD90269C8BE /* Resources */,
+				D6A37D74F567B8A12190C5D0 /* Frameworks */,
+				33CBAA7F2E231DB5CE42A509 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
 			name = NotionSketch;
+			packageProductDependencies = (
+			);
 			productName = NotionSketch;
-			productReference = A30000010000000000000001 /* NotionSketch.app */;
+			productReference = 26DC6B26049B81526FEF9EF5 /* NotionSketch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		AA0000010000000000000001 /* Project object */ = {
+		C2A9EE31706F01F90C4C0A04 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1600;
-				LastUpgradeCheck = 2600;
+				BuildIndependentTargetsInParallel = YES;
 				TargetAttributes = {
-					A60000010000000000000001 = {
-						CreatedOnToolsVersion = 16.0;
-					};
 				};
 			};
-			buildConfigurationList = A80000010000000000000001 /* Build configuration list for PBXProject "NotionSketch" */;
+			buildConfigurationList = FBF844104E75374C5C1C69F8 /* Build configuration list for PBXProject "NotionSketch" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
-				en,
 				Base,
+				en,
 			);
-			mainGroup = A50000010000000000000001;
-			productRefGroup = A50000010000000000000003 /* Products */;
+			mainGroup = 7806C1ADA811A52FBE1B2D73;
+			productRefGroup = F400E7A63D6B07AD734518AE /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A60000010000000000000001 /* NotionSketch */,
+				29C0AFE8671AFA29DD3BDB61 /* NotionSketch */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A90000010000000000000001 /* Resources */ = {
+		EEB4B32D134BCBD90269C8BE /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000010000000000000006 /* Assets.xcassets in Resources */,
-				1B2B6C8D12F6434FB5949385 /* LaunchScreen.storyboard in Resources */,
+				AB0D27246072CE31B45A2476 /* Assets.xcassets in Resources */,
+				8FC3D530FBA1DA9004F04E62 /* LaunchScreen.storyboard in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A70000010000000000000001 /* Sources */ = {
+		3D7319269296D2358D9E74F3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000010000000000000001 /* NotionSketchApp.swift in Sources */,
-				A10000010000000000000002 /* ContentView.swift in Sources */,
-				A10000010000000000000003 /* CanvasView.swift in Sources */,
-				AC96DD407F0B402C8E23AEEB /* SplashScreen.swift in Sources */,
-				A10000010000000000000004 /* CanvasViewModel.swift in Sources */,
-				A10000010000000000000005 /* NotionService.swift in Sources */,
-				A10000010000000000000007 /* SketchDocument.swift in Sources */,
-				A10000010000000000000008 /* SettingsManager.swift in Sources */,
-				A10000010000000000000009 /* SettingsView.swift in Sources */,
-				A1000001000000000000000A /* DrawingListView.swift in Sources */,
-				A1000001000000000000000B /* SyncLogger.swift in Sources */,
-				A1000001000000000000000C /* NotionSyncManager.swift in Sources */,
+				7F60C89D08F22DF51DF54D8A /* TuistAssets+NotionSketch.swift in Sources */,
+				3778925590A2822D2CB46614 /* TuistBundle+NotionSketch.swift in Sources */,
+				D0C4EAC126BA816B825AC65A /* CanvasView.swift in Sources */,
+				149DD5268AB1D298F9265D44 /* CanvasViewModel.swift in Sources */,
+				F43D756FD89194C7520C10E4 /* ContentView.swift in Sources */,
+				54A88895C7D591A7011356E2 /* DrawingListView.swift in Sources */,
+				DA620F054C483B856F0BCC7B /* NotionService.swift in Sources */,
+				9B23635B0925F0DF4E8E4038 /* NotionSketchApp.swift in Sources */,
+				985C1C9F731445949C8F7005 /* NotionSyncManager.swift in Sources */,
+				222A0089C7322E19AD4233A9 /* SettingsManager.swift in Sources */,
+				5DA96ED565D035D908257001 /* SettingsView.swift in Sources */,
+				FAA5FD1B9961D248DDB88301 /* SketchDocument.swift in Sources */,
+				10B334AF794B572D9C2E3452 /* SplashScreen.swift in Sources */,
+				5331DB374D36A20C668D0BF4 /* SyncLogger.swift in Sources */,
+				3E5E3BE1D646724B6DE27E20 /* WhiteboardDocument.swift in Sources */,
+				FD68B44EBE7055639DEAFE4F /* WhiteboardObject.swift in Sources */,
+				F2DCFBED1B04CAA293EE1403 /* WhiteboardObjectKind.swift in Sources */,
+				FA5B312141A0EB184BD74CCB /* WhiteboardSelection.swift in Sources */,
+				44FEE3C1D9E827777CD1573B /* WhiteboardTool.swift in Sources */,
+				6C4D8A31C37A5FBCFB04C287 /* WhiteboardViewModel.swift in Sources */,
+				6EEA974EED814A7E95BD7A64 /* WhiteboardZIndex.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		AB0000010000000000000001 /* Debug */ = {
+		7C34D9CCEC828FF7CD38DA18 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
 				CLANG_ENABLE_OBJC_WEAK = YES;
@@ -213,12 +301,139 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = B25F8Q5S75;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		BA5D6A7E330D196F647D6357 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = "Derived/InfoPlists/NotionSketch-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.app;
+				PRODUCT_NAME = NotionSketch;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Release;
+		};
+		E643444ECCACB6BC2C406EA4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = "Derived/InfoPlists/NotionSketch-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.app;
+				PRODUCT_NAME = NotionSketch;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					DEBUG,
+				);
+				SWIFT_COMPILATION_MODE = singlefile;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				TARGETED_DEVICE_FAMILY = 2;
+			};
+			name = Debug;
+		};
+		FA5B87A793B7940EA7CB9815 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEAD_CODE_STRIPPING = YES;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				DEVELOPMENT_TEAM = B25F8Q5S75;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_OPTIMIZATION_LEVEL = 0;
@@ -232,162 +447,35 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
-				MTL_FAST_MATH = YES;
+				MTL_ENABLE_DEBUG_INFO = YES;
 				ONLY_ACTIVE_ARCH = YES;
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 6.0;
 			};
 			name = Debug;
-		};
-		AB0000010000000000000002 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = B25F8Q5S75;
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				SDKROOT = iphoneos;
-				STRING_CATALOG_GENERATE_SYMBOLS = YES;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_VERSION = 6.0;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		AC0000010000000000000001 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = NotionSketch/Info.plist;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_UIFileSharingEnabled = YES;
-				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 2;
-			};
-			name = Debug;
-		};
-		AC0000010000000000000002 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = NotionSketch/Info.plist;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
-				INFOPLIST_KEY_UIFileSharingEnabled = YES;
-				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
-				SUPPORTS_MACCATALYST = NO;
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_STRICT_CONCURRENCY = complete;
-				SWIFT_VERSION = 6.0;
-				TARGETED_DEVICE_FAMILY = 2;
-			};
-			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A80000010000000000000001 /* Build configuration list for PBXProject "NotionSketch" */ = {
+		3A56FC95BEC6ED7D92E414D0 /* Build configuration list for PBXNativeTarget "NotionSketch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AB0000010000000000000001 /* Debug */,
-				AB0000010000000000000002 /* Release */,
+				E643444ECCACB6BC2C406EA4 /* Debug */,
+				BA5D6A7E330D196F647D6357 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		A80000010000000000000002 /* Build configuration list for PBXNativeTarget "NotionSketch" */ = {
+		FBF844104E75374C5C1C69F8 /* Build configuration list for PBXProject "NotionSketch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AC0000010000000000000001 /* Debug */,
-				AC0000010000000000000002 /* Release */,
+				FA5B87A793B7940EA7CB9815 /* Debug */,
+				7C34D9CCEC828FF7CD38DA18 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = AA0000010000000000000001 /* Project object */;
+	rootObject = C2A9EE31706F01F90C4C0A04 /* Project object */;
 }
