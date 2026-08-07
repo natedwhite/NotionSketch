@@ -164,7 +164,7 @@ final class NotionServiceContainerTests: XCTestCase {
         MockURLProtocol.setHandler { [self] request in
             XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data(base64Encoded: "not-valid-json")!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data("invalid json".utf8))
         }
 
         let resolved = try await service.resolveSketchesContainer()
@@ -212,7 +212,7 @@ final class NotionServiceContainerTests: XCTestCase {
         MockURLProtocol.setHandler { [self] request in
             XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data(base64Encoded: "not-valid-json")!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data("invalid json".utf8))
         }
 
         let propName = await service.getDataSourceTitlePropertyName(dataSourceID: Self.dataSourceID)
@@ -292,7 +292,7 @@ final class NotionServiceContainerTests: XCTestCase {
                 let body = self.bodyJSON(from: request)
                 let parent = body["parent"] as? [String: Any]
                 if parent?["type"] as? String == "database_id" {
-                    XCTAssertNotEqual(parent["database_id"] as? String, Self.dataSourceID, "dataSourceID should never be used as database_id")
+                    XCTAssertNotEqual(parent?["database_id"] as? String, Self.dataSourceID, "dataSourceID should never be used as database_id")
                 }
             }
         }

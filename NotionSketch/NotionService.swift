@@ -476,11 +476,6 @@ actor NotionService {
         return data
     }
 
-    private func isNetworkError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        return nsError.domain == NSURLErrorDomain
-    }
-
     // MARK: - File Upload: Step 1 — Create
 
     private func createFileUpload(filename: String, contentType: String) async throws -> String {
@@ -606,7 +601,7 @@ actor NotionService {
     private func createPageInDatabaseInternal(databaseID: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         let titlePropertyName = try await getDatabaseTitlePropertyName(databaseID: databaseID)
         return try await createPageInContainer(
-            parentPayload: ["database_id": databaseID],
+            parentPayload: ["type": "database_id", "database_id": databaseID],
             apiVersion: nil,
             titlePropertyName: titlePropertyName,
             title: title,
@@ -635,14 +630,30 @@ actor NotionService {
                 appLink: appLink
             )
         } catch {
-            guard let fallbackDB = fallbackDatabaseID, isNetworkError(error) else {
-                SyncLogger.log("❌ Data source page creation failed for \(dataSourceID), no safe database fallback available")
+            // Never retry a cancelled request.
+            if error is CancellationError { throw error }
+            if let urlError = error as? URLError, urlError.code == .cancelled { throw error }
+            
+            // Only fall back when the page definitely was NOT created: transport
+            // failures and HTTP rejections. A decode failure after a possible
+            // server-side success must NOT retry — it would duplicate the page.
+            let isHTTPError: Bool
+            if case .httpError = error as? NotionServiceError {
+                isHTTPError = true
+            } else {
+                isHTTPError = false
+            }
+            let shouldFallBack = (error is URLError) || isHTTPError
+            
+            guard shouldFallBack, let fallbackDB = fallbackDatabaseID else {
+                SyncLogger.log("❌ Data source page creation failed for \(dataSourceID), not retrying: \(error.localizedDescription)")
                 throw error
             }
-            SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)) due to network error, retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
+            
+            SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)), retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
             let dbTitleProp = try await getDatabaseTitlePropertyName(databaseID: fallbackDB)
             return try await createPageInContainer(
-                parentPayload: ["database_id": fallbackDB],
+                parentPayload: ["type": "database_id", "database_id": fallbackDB],
                 apiVersion: nil,
                 titlePropertyName: dbTitleProp,
                 title: title,
