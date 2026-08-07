@@ -67,7 +67,7 @@ final class CanvasViewModel {
 
     // MARK: - Private Properties
 
-    private var targetDatabaseID: String? = nil
+    private var targetDataSourceID: String? = nil
     private let notionService = NotionService()
 
     // MARK: - Whiteboard Bridge
@@ -169,11 +169,11 @@ final class CanvasViewModel {
         guard let pageID = document.notionPageID else { return }
         guard SettingsManager.shared.isConfigured else { return }
         
-        // 0. Ensure target database for filtered search is known
-        if targetDatabaseID == nil {
-            targetDatabaseID = try? await notionService.fetchConnectedPagesTargetDatabaseID()
-            if let dbID = targetDatabaseID {
-                SyncLogger.log("🎯 Resolved target database for Connected Pages: \(dbID)")
+        // 0. Ensure target data source for filtered search is known
+        if targetDataSourceID == nil {
+            targetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
+            if let dsID = targetDataSourceID {
+                SyncLogger.log("🎯 Resolved target data source for Connected Pages: \(dsID)")
             }
         }
         
@@ -269,28 +269,28 @@ final class CanvasViewModel {
         // 1. Check for Manual override in Settings
         let manualID = SettingsManager.shared.connectedPagesDatabaseID
         if !manualID.isEmpty {
-            targetDatabaseID = manualID
+            targetDataSourceID = manualID
         }
 
-        // 2. Lazy load target DB if not yet cached/configured
-        if targetDatabaseID == nil {
-             targetDatabaseID = try? await notionService.fetchConnectedPagesTargetDatabaseID()
+        // 2. Lazy load target data source if not yet cached/configured
+        if targetDataSourceID == nil {
+             targetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
         }
 
         // 3. Strict Query
-        // We require a target database ID (manual or auto-detected).
-        guard let dbID = targetDatabaseID else {
-            // If we can't find a DB, we return empty (Strict mode).
+        // We require a target data source ID (manual or auto-detected).
+        guard let dsID = targetDataSourceID else {
+            // If we can't find a data source, we return empty (Strict mode).
             // User can now configure it manually if auto-detection fails.
-            SyncLogger.log("⚠️ Cannot search: Target database not resolved. Please configure 'Connected Pages Database' in Settings.")
+            SyncLogger.log("⚠️ Cannot search: Target data source not resolved. Please configure 'Connected Pages Database' in Settings.")
             return []
         }
 
         do {
-            let results = try await notionService.queryDatabase(databaseID: dbID, query: query)
+            let results = try await notionService.queryDatabase(databaseID: dsID, query: query)
             return mapResults(results)
         } catch {
-            SyncLogger.log("⚠️ Targeted search failed: \(dbID) - \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Targeted search failed: \(dsID) - \(error.localizedDescription)")
             return []
         }
     }

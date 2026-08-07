@@ -74,6 +74,7 @@ private struct DatabaseProperty: Decodable {
 
 private struct RelationConfig: Decodable {
     let database_id: String?
+    let data_source_id: String?
 }
 
 private struct PageDetailsResponse: Decodable {
@@ -1752,18 +1753,16 @@ actor NotionService {
 
     // MARK: - Targeted Database Query (Search inside a DB)
     
-    /// Queries the parent database to find the 'Connected Pages' relation target database ID.
-    func fetchConnectedPagesTargetDatabaseID() async throws -> String? {
+    /// Queries the parent data source to find the 'Connected Pages' relation target data source ID.
+    func fetchConnectedPagesTargetDataSourceID() async throws -> String? {
         let resolved = try await resolveSketchesContainer()
         guard case .database(let databaseID) = resolved.ref else { return nil }
         
-        // Notion API will send a 302 redirect if the ID is a page ID but treated as a database ID? 
-        // Or if the content is "Compact" vs "Full".
-        // Use GET /v1/databases/{id}
+        // Use GET /v1/data_sources/{id} to get the data source schema
         // If properties are empty, it might be that the integration doesn't have access to the CONTENT of the database, only the title?
         // Or the 'properties' field is not returned for some reason?
         
-        let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)")!
+        let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(databaseID)")!
         let request = try await authorizedRequest(url: url)
         
         let (data, _) = try await safeRequest(request, context: "fetchConnectedPagesTarget")
@@ -1774,10 +1773,10 @@ actor NotionService {
             SyncLogger.log("ℹ️ API Object Type: \(objectType)")
             
             if let props = json["properties"] as? [String: Any] {
-                 let keys = props.keys.sorted().joined(separator: ", ")
-                 SyncLogger.log("🔎 RAW API Properties: \(keys)")
+                  let keys = props.keys.sorted().joined(separator: ", ")
+                  SyncLogger.log("🔎 RAW API Properties: \(keys)")
             } else {
-                 SyncLogger.log("⚠️ 'properties' key missing or not a dictionary. Keys found: \(json.keys.joined(separator: ", "))")
+                  SyncLogger.log("⚠️ 'properties' key missing or not a dictionary. Keys found: \(json.keys.joined(separator: ", "))")
             }
         } else {
              let rawStr = String(data: data, encoding: .utf8) ?? ""
@@ -1788,17 +1787,17 @@ actor NotionService {
         
         // Find "Connected Pages" property (case-insensitive) and get its relation target
         let allKeys = decoded.properties?.keys.map { $0 } ?? []
-        SyncLogger.log("📋 Database Properties Found: \(allKeys.joined(separator: ", "))")
+        SyncLogger.log("📋 Data Source Properties Found: \(allKeys.joined(separator: ", "))")
         
         let key = decoded.properties?.keys.first(where: { $0.localizedCaseInsensitiveCompare("Connected Pages") == .orderedSame })
         
         if let key = key,
            let property = decoded.properties?[key],
            let relation = property.relation {
-            SyncLogger.log("🔗 Found 'Connected Pages' Relation Target DB: \(relation.database_id ?? "nil")")
-            return relation.database_id
+            SyncLogger.log("🔗 Found 'Connected Pages' Relation Target Data Source: \(relation.data_source_id ?? relation.database_id ?? "nil")")
+            return relation.data_source_id ?? relation.database_id
         }
-        SyncLogger.log("⚠️ Could not find 'Connected Pages' property or relation config in database schema.")
+        SyncLogger.log("⚠️ Could not find 'Connected Pages' property or relation config in data source schema.")
         return nil
     }
 

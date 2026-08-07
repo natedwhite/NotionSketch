@@ -27,8 +27,8 @@ final class NotionSyncManager {
     private var documentStates: [String: DocumentSyncState] = [:]
     private let notionService = NotionService()
     
-    // Cache for relation target DB
-    private var cachedTargetDatabaseID: String? = nil
+    // Cache for relation target data source
+    private var cachedTargetDataSourceID: String? = nil
     
     /// Requests a sync for the given document with a debounce delay.
     func requestSync(document: SketchDocument, delay: Duration = .seconds(10)) {
@@ -285,9 +285,9 @@ final class NotionSyncManager {
     private func fetchRemoteProperties(for document: SketchDocument) async {
         guard let pageID = document.notionPageID else { return }
         
-        // Ensure target DB known
-        if cachedTargetDatabaseID == nil {
-            cachedTargetDatabaseID = try? await notionService.fetchConnectedPagesTargetDatabaseID()
+        // Ensure target data source known
+        if cachedTargetDataSourceID == nil {
+            cachedTargetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
         }
         
         guard let (title, _, connectedIDs) = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
