@@ -60,6 +60,16 @@ let project = Project(
                     "TARGETED_DEVICE_FAMILY": .string("2"),
                 ]
             )
-        )
+        ),
+        .target(
+            name: "NotionSketchTests",
+            destinations: Destinations.iOS,
+            product: .unitTests,
+            bundleId: "com.notionsketch.tests",
+            deploymentTargets: .iOS("17.0"),
+            infoPlist: .default,
+            sources: ["NotionSketchTests/**"],
+            dependencies: [.target(name: "NotionSketch")]
+        ),
     ]
 )

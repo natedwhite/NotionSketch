@@ -12,27 +12,6 @@ enum NotionConfig {
     static let baseURL = "https://api.notion.com/v1"
 }
 
-// MARK: - Container Reference
-
-/// Represents the type of Notion container the app is using.
-enum NotionContainerRef {
-    case database(id: String)
-    case dataSource(id: String)
-
-    var id: String {
-        switch self {
-        case .database(let id), .dataSource(let id): return id
-        }
-    }
-
-    var isDataSource: Bool {
-        switch self {
-        case .dataSource: return true
-        case .database: return false
-        }
-    }
-}
-
 // MARK: - Notion API Errors
 
 enum NotionServiceError: LocalizedError {
@@ -59,7 +38,7 @@ enum NotionServiceError: LocalizedError {
         case .decodingFailed(let reason):
             return "Failed to decode response: \(reason)"
         case .notConfigured:
-            return "Notion API token or Database ID not configured. Open Settings to add them."
+            return "Notion API token or container not configured."
         }
     }
 }
@@ -135,6 +114,14 @@ private struct DataSourceDiscoveryResponse: Decodable {
 
 private struct DataSourceSchemaResponse: Decodable {
     let properties: [String: DataSourceProperty]?
+}
+
+private struct GetDatabaseResponse: Decodable {
+    struct DataSourceRef: Decodable {
+        let id: String
+        let name: String?
+    }
+    let data_sources: [DataSourceRef]
 }
 
 private struct DataSourceProperty: Decodable {
@@ -358,8 +345,17 @@ private struct SyncedFrom: Encodable {
 actor NotionService {
 
     private let session: URLSession
+    private let tokenOverride: String?
+    private let containerInputOverride: String?
 
-    init(session: URLSession? = nil) {
+    init(
+        session: URLSession? = nil,
+        tokenOverride: String? = nil,
+        containerInputOverride: String? = nil
+    ) {
+        self.tokenOverride = tokenOverride
+        self.containerInputOverride = containerInputOverride
+
         if let session = session {
             self.session = session
         } else {
@@ -375,165 +371,83 @@ actor NotionService {
 
     /// Reads the current API token from SettingsManager (must hop to MainActor).
     private func getToken() async -> String {
-        await MainActor.run { SettingsManager.shared.apiToken }
-    }
-
-    private func getDatabaseID() async -> String {
-        await MainActor.run { SettingsManager.shared.databaseID }
+        if let override = tokenOverride {
+            return override
+        }
+        return await MainActor.run { SettingsManager.shared.apiToken }
     }
 
     /// Reads the raw container input from SettingsManager.
     private func getContainerInput() async -> String {
-        await MainActor.run { SettingsManager.shared.containerInput }
-    }
-
-    /// Parses the raw user input into a container reference.
-    /// Detects data source URLs by path segments and query parameters.
-    private func parseContainerRef(from input: String) -> NotionContainerRef? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        // Try to parse as URL first to detect data source vs database
-        if let url = URL(string: trimmed), let host = url.host, host.contains("notion") {
-            let segments = url.path.split(separator: "/").map(String.init)
-
-            // Check path for data-source indicators: /data_sources/<id> or /data-source/<id>
-            var isDataSource = false
-            for (index, segment) in segments.enumerated() {
-                if segment == "data_sources" || segment == "data-source" {
-                    isDataSource = true
-                    // Try to extract ID from the next segment
-                    if index + 1 < segments.count, let id = Self.extractHexID(from: segments[index + 1]) {
-                        return .dataSource(id: Self.formatAsUUID(id))
-                    }
-                }
-            }
-
-            // Check query parameters for ds= or data_source=
-            if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-                for item in queryItems {
-                    if (item.name == "ds" || item.name == "data_source"), let value = item.value, !value.isEmpty {
-                        if let id = Self.extractHexID(from: value) {
-                            return .dataSource(id: Self.formatAsUUID(id))
-                        }
-                    }
-                }
-            }
-
-            // Not a data-source URL — try standard database URL parsing
-            if let lastSegment = segments.last {
-                if let id = Self.extractHexID(from: lastSegment) {
-                    return .database(id: Self.formatAsUUID(id))
-                }
-            }
+        if let override = containerInputOverride {
+            return override
         }
-
-        // Raw ID — treat as database (legacy behavior)
-        let noDashes = trimmed.replacingOccurrences(of: "-", with: "")
-        if noDashes.count == 32 && noDashes.allSatisfy(\.isHexDigit) {
-            return .database(id: Self.formatAsUUID(noDashes))
-        }
-
-        return nil
-    }
-
-    private struct ResolvedNotionContainer {
-        let ref: NotionContainerRef
-        let fallbackDatabaseID: String?
+        return await MainActor.run { SettingsManager.shared.containerInput }
     }
 
     /// Resolves the active container with optional database-to-data-source discovery.
-    private func resolveSketchesContainer() async throws -> ResolvedNotionContainer {
-        let input = await getContainerInput()
-
-        if let ref = parseContainerRef(from: input) {
-            switch ref {
-            case .dataSource(let id):
-                // Explicit data-source input — no fallback database
-                SyncLogger.log("📦 Resolved container: data_source (\(id)), no fallback database")
-                return ResolvedNotionContainer(ref: .dataSource(id: id), fallbackDatabaseID: nil)
-
-            case .database(let dbID):
-                // Database input — attempt data-source discovery via 2025 API
-                if let discovered = try await discoverDataSource(fromDatabase: dbID) {
-                    SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
-                    return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
-                }
-                SyncLogger.log("📦 Resolved container: database (\(dbID))")
-                return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
-            }
-        }
-
-        // Fallback: use the extracted ID as a database ID (legacy behavior)
-        let id = await getDatabaseID()
-        guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    internal func resolveSketchesContainer() async throws -> ResolvedNotionContainer {
+        let token = await getToken()
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NotionServiceError.notConfigured
         }
 
-        // Attempt data-source discovery for legacy input as well
-        if let discovered = try await discoverDataSource(fromDatabase: id) {
-            SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from legacy database (\(id))")
-            return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: id)
+        let input = await getContainerInput()
+        guard let ref = NotionContainerParser.parse(input) else {
+            throw NotionServiceError.notConfigured
         }
 
-        SyncLogger.log("📦 Resolved container: database (\(id))")
-        return ResolvedNotionContainer(ref: .database(id: id), fallbackDatabaseID: id)
+        switch ref {
+        case .dataSource(let id):
+            SyncLogger.log("📦 Resolved container: data_source (\(id)), no fallback database")
+            return ResolvedNotionContainer(ref: .dataSource(id: id), fallbackDatabaseID: nil)
+
+        case .database(let dbID):
+            if let discovered = try await discoverDataSource(fromDatabase: dbID) {
+                SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
+                return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
+            }
+            SyncLogger.log("📦 Resolved container: database (\(dbID))")
+            return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
+        }
     }
 
     /// Calls GET /v1/databases/{database_id} with 2025 version and returns the first data source ID.
-    private func discoverDataSource(fromDatabase databaseID: String) async throws -> String? {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
-            return nil
-        }
-
-        var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-        let (data, response) = try await safeRequest(request, context: "discoverDataSource")
-        let validatedData = try validate(data, response)
-
-        let decoded: DataSourceDiscoveryResponse
+    /// Returns nil on any failure mode (network, HTTP, decode, empty).
+    private func discoverDataSource(fromDatabase databaseID: String) async -> String? {
         do {
-            decoded = try JSONDecoder().decode(DataSourceDiscoveryResponse.self, from: validatedData)
+            guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
+                SyncLogger.log("⚠️ Data source discovery: invalid URL for database \(databaseID)")
+                return nil
+            }
+
+            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let (data, response) = try await safeRequest(request, context: "discoverDataSource")
+            let validatedData = try validate(data, response)
+
+            let decoded: DataSourceDiscoveryResponse
+            do {
+                decoded = try JSONDecoder().decode(DataSourceDiscoveryResponse.self, from: validatedData)
+            } catch {
+                SyncLogger.log("⚠️ Data source discovery decode failed for database \(databaseID): \(error.localizedDescription)")
+                return nil
+            }
+
+            guard let entries = decoded.data_sources, !entries.isEmpty else {
+                SyncLogger.log("ℹ️ No data sources found for database \(databaseID)")
+                return nil
+            }
+
+            let firstEntry = entries[0]
+            if let normalized = NotionContainerParser.normalizedID(firstEntry.id) {
+                return normalized
+            }
+            SyncLogger.log("⚠️ Discovered data source ID is not a valid UUID: \(firstEntry.id)")
+            return nil
         } catch {
-            SyncLogger.log("⚠️ Data source discovery decode failed for database \(databaseID): \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Data source discovery failed for database \(databaseID): \(error.localizedDescription)")
             return nil
         }
-
-        guard let entries = decoded.data_sources, !entries.isEmpty else {
-            SyncLogger.log("ℹ️ No data sources found for database \(databaseID)")
-            return nil
-        }
-
-        let firstEntry = entries[0]
-        // Format as dashed UUID if needed
-        let rawID = firstEntry.id.replacingOccurrences(of: "-", with: "")
-        if rawID.count == 32 && rawID.allSatisfy(\.isHexDigit) {
-            return Self.formatAsUUID(rawID)
-        }
-        return firstEntry.id
-    }
-
-    /// Finds 32 consecutive hex characters at the end of a string.
-    private static func extractHexID(from string: String) -> String? {
-        let noQuery = string.components(separatedBy: "?").first ?? string
-        let noDashes = noQuery.replacingOccurrences(of: "-", with: "")
-        guard noDashes.count >= 32 else { return nil }
-        let suffix = String(noDashes.suffix(32))
-        guard suffix.allSatisfy(\.isHexDigit) else { return nil }
-        return suffix
-    }
-
-    /// Formats a 32-char hex string as a UUID with dashes (8-4-4-4-12).
-    private static func formatAsUUID(_ hex: String) -> String {
-        guard hex.count == 32 else { return hex }
-        let chars = Array(hex)
-        let parts = [
-            String(chars[0..<8]),
-            String(chars[8..<12]),
-            String(chars[12..<16]),
-            String(chars[16..<20]),
-            String(chars[20..<32])
-        ]
-        return parts.joined(separator: "-")
     }
 
     // MARK: - Common Helpers
@@ -809,38 +723,43 @@ actor NotionService {
     private var dataSourceTitlePropertyNameCache: [String: String] = [:]
 
     /// Retrieves the data source schema and finds the name of the title property.
-    private func getDataSourceTitlePropertyName(dataSourceID: String) async throws -> String {
+    internal func getDataSourceTitlePropertyName(dataSourceID: String) async -> String {
         if let cached = dataSourceTitlePropertyNameCache[dataSourceID] {
             return cached
         }
 
-        guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
-            throw NotionServiceError.invalidURL
-        }
-
-        var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-        let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
-        let validatedData = try validate(data, response)
-
-        let decoded: DataSourceSchemaResponse
         do {
-            decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
+            guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
+                throw NotionServiceError.invalidURL
+            }
+
+            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
+            let validatedData = try validate(data, response)
+
+            let decoded: DataSourceSchemaResponse
+            do {
+                decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
+            } catch {
+                SyncLogger.log("⚠️ Data source title property decode failed for \(dataSourceID): \(error.localizedDescription)")
+                return "Name"
+            }
+
+            // Find the property whose type is "title"
+            for (name, property) in decoded.properties ?? [:] {
+                if property.type == "title" {
+                    dataSourceTitlePropertyNameCache[dataSourceID] = name
+                    return name
+                }
+            }
+
+            // Fallback — use "Name" (capitalized) as compatibility default
+            SyncLogger.log("⚠️ No title property found in data source \(dataSourceID), using 'Name' fallback")
+            return "Name"
         } catch {
             SyncLogger.log("⚠️ Data source title property discovery failed for \(dataSourceID): \(error.localizedDescription)")
             return "Name"
         }
-
-        // Find the property whose type is "title"
-        for (name, property) in decoded.properties ?? [:] {
-            if property.type == "title" {
-                dataSourceTitlePropertyNameCache[dataSourceID] = name
-                return name
-            }
-        }
-
-        // Fallback — use "Name" (capitalized) as compatibility default
-        SyncLogger.log("⚠️ No title property found in data source \(dataSourceID), using 'Name' fallback")
-        return "Name"
     }
 
     /// Retrieves the database and finds the name of the title property.
@@ -878,6 +797,43 @@ actor NotionService {
         // Fallback — shouldn't happen since every database has a title property
         return "Name"
     }
+
+    // MARK: - Data Source Discovery
+
+    /// Fetches the first data source ID for a database.
+    /// Always uses API version 2025-09-03, regardless of NotionConfig.apiVersion.
+    func fetchDataSourceID(databaseID: String) async throws -> String {
+        guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
+            throw NotionServiceError.invalidURL
+        }
+
+        let token = await getToken()
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw NotionServiceError.notConfigured
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("2025-09-03", forHTTPHeaderField: "Notion-Version")
+
+        let (data, response) = try await safeRequest(request, context: "fetchDataSourceID")
+        let validatedData = try validate(data, response)
+
+        let decoded: GetDatabaseResponse
+        do {
+            decoded = try JSONDecoder().decode(GetDatabaseResponse.self, from: validatedData)
+        } catch {
+            let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
+            throw NotionServiceError.decodingFailed("fetchDataSourceID: \(error.localizedDescription) — raw: \(raw.prefix(300))")
+        }
+
+        guard let first = decoded.data_sources.first else {
+            throw NotionServiceError.decodingFailed("fetchDataSourceID: database has no data_sources")
+        }
+        return first.id
+    }
+
     // MARK: - Page Content (Using Blocks)
     
     /// Fetches drawing data from the page.
@@ -1288,10 +1244,15 @@ actor NotionService {
         var properties: [String: Any] = [:]
         
         if let title {
-             // We need the title property name.
-             let dbID = await getDatabaseID()
-             let titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
-             properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
+            let resolved = try await resolveSketchesContainer()
+            let titleProp: String
+            switch resolved.ref {
+            case .database(let dbID):
+                titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
+            case .dataSource(let dsID):
+                titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+            }
+            properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
         }
 
         if let ocrText {
@@ -1549,11 +1510,11 @@ actor NotionService {
         switch resolved.ref {
         case .dataSource(let id):
             do {
-                return try await queryContainer(ref: .dataSource(id: id), query: "")
+                return try await queryActivePageIDs(ref: .dataSource(id: id))
             } catch {
                 if let fallbackDB = resolved.fallbackDatabaseID {
                     SyncLogger.log("⚠️ Data source query failed (\(id)), falling back to database (\(fallbackDB)): \(error.localizedDescription)")
-                    return try await queryContainer(ref: .database(id: fallbackDB), query: "")
+                    return try await queryActivePageIDs(ref: .database(id: fallbackDB))
                 } else {
                     SyncLogger.log("❌ Data source query failed (\(id)), no safe database fallback available")
                     throw error
@@ -1561,19 +1522,41 @@ actor NotionService {
             }
 
         case .database(let id):
-            return try await queryContainer(ref: .database(id: id), query: "")
+            return try await queryActivePageIDs(ref: .database(id: id))
         }
     }
 
-    /// Container-aware query method that routes to the correct endpoint and API version.
-    func queryContainer(ref: NotionContainerRef, query: String) async throws -> Set<String> {
+    /// Returns a set of non-archived page IDs from the given container.
+    internal func queryActivePageIDs(ref: NotionContainerRef) async throws -> Set<String> {
         switch ref {
         case .dataSource(let id):
-            return try await queryPagesInDataSource(dataSourceID: id, query: query)
+            return try await queryPagesInDataSource(dataSourceID: id, query: "")
 
         case .database(let id):
-            return try await queryPagesInDatabase(databaseID: id, query: query)
+            return try await queryPagesInDatabase(databaseID: id, query: "")
         }
+    }
+
+    /// Title-filtered container query that returns structured page results.
+    func queryContainer(
+        ref: NotionContainerRef,
+        query: String
+    ) async throws -> [(id: String, title: String, icon: String?)] {
+        switch ref {
+        case .dataSource(let id):
+            return try await queryPagesInDataSourceWithTitle(dataSourceID: id, query: query)
+
+        case .database(let id):
+            return try await queryPagesInDatabaseWithTitle(databaseID: id, query: query)
+        }
+    }
+
+    /// Queries a specific database for pages matching a title query.
+    func queryDatabase(
+        databaseID: String,
+        query: String
+    ) async throws -> [(id: String, title: String, icon: String?)] {
+        try await queryContainer(ref: .database(id: databaseID), query: query)
     }
 
     /// Queries a database for active (non-archived) page IDs using legacy API.
@@ -1793,8 +1776,8 @@ actor NotionService {
     
     /// Queries the parent database to find the 'Connected Pages' relation target database ID.
     func fetchConnectedPagesTargetDatabaseID() async throws -> String? {
-        let databaseID = await getDatabaseID()
-        guard !databaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let resolved = try await resolveSketchesContainer()
+        guard case .database(let databaseID) = resolved.ref else { return nil }
         
         // Notion API will send a 302 redirect if the ID is a page ID but treated as a database ID? 
         // Or if the content is "Compact" vs "Full".
@@ -1841,30 +1824,34 @@ actor NotionService {
         return nil
     }
 
-    /// Queries a specific database for pages matching a title query.
-    func queryDatabase(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/search") else {
-            throw NotionServiceError.invalidURL
-        }
-
-        var request = try await authorizedRequest(url: url, method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // Re-attempting strictly with POST /v1/databases/{id}/query
-        // This is the standard way to search WITHIN a database.
-        guard let dbQueryUrl = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query") else {
-             throw NotionServiceError.invalidURL
-        }
-        
-        // We override the request
-        request = try await authorizedRequest(url: dbQueryUrl, method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // We need to filter by title.
-        // We need the property name for the title.
+    /// Queries a database for pages matching a title query.
+    private func queryPagesInDatabaseWithTitle(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
         let titleKey = try await getDatabaseTitlePropertyName(databaseID: databaseID)
+        return try await queryWithTitle(
+            url: URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query")!,
+            apiVersion: nil,
+            titleKey: titleKey,
+            query: query
+        )
+    }
 
-        let dbPayload: [String: Any] = [
+    /// Queries a data source for pages matching a title query.
+    private func queryPagesInDataSourceWithTitle(dataSourceID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
+        let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+        return try await queryWithTitle(
+            url: URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)/query")!,
+            apiVersion: NotionConfig.dataSourceApiVersion,
+            titleKey: titleKey,
+            query: query
+        )
+    }
+
+    /// Generic paginated title-filtered query for any container.
+    private func queryWithTitle(url: URL, apiVersion: String?, titleKey: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
+        var request = try await authorizedRequest(url: url, method: "POST", version: apiVersion)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
             "filter": [
                 "property": titleKey,
                 "title": [
@@ -1879,39 +1866,36 @@ actor NotionService {
             ],
             "page_size": 20
         ]
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: dbPayload)
-        
-        let (data, response) = try await safeRequest(request, context: "queryDatabase_strict")
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await safeRequest(request, context: "queryWithTitle")
         let validatedData = try validate(data, response)
-        
-        // Parse results
+
         guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
               let results = json["results"] as? [[String: Any]] else {
             return []
         }
-        
+
         var foundPages: [(id: String, title: String, icon: String?)] = []
         for object in results {
             guard let id = object["id"] as? String,
                   let properties = object["properties"] as? [String: Any] else { continue }
-            
-            // Find title property
+
             var titleString = "Untitled"
             for (_, propValue) in properties {
                 if let propDict = propValue as? [String: Any],
                    let type = propDict["type"] as? String,
                    type == "title",
                    let titleItems = propDict["title"] as? [[String: Any]] {
-                    
+
                     titleString = titleItems.compactMap { item in
                         (item["text"] as? [String: Any])?["content"] as? String
                     }.joined()
                     break
                 }
             }
-            
-            // Parse Icon
+
             var iconString: String? = nil
             if let iconDict = object["icon"] as? [String: Any],
                let type = iconDict["type"] as? String {

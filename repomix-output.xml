@@ -46,6 +46,7 @@ The content is organized as follows:
 Derived/
   InfoPlists/
     NotionSketch-Info.plist
+    NotionSketchTests-Info.plist
   Sources/
     TuistAssets+NotionSketch.swift
     TuistBundle+NotionSketch.swift
@@ -75,6 +76,7 @@ NotionSketch/
   DrawingListView.swift
   Info.plist
   LaunchScreen.storyboard
+  NotionContainerParser.swift
   NotionService.swift
   NotionSketchApp.swift
   NotionSyncManager.swift
@@ -108,6 +110,11 @@ NotionSketch.xcworkspace/
     WorkspaceSettings.xcsettings
   .tuist-generated
   contents.xcworkspacedata
+NotionSketchTests/
+  MockURLProtocol.swift
+  NotionContainerParserTests.swift
+  NotionServiceContainerTests.swift
+  SettingsManagerTests.swift
 Scripts/
   EstimateSizes.swift
   MeasureDrawing.swift
@@ -119,6 +126,922 @@ README.md
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="Derived/InfoPlists/NotionSketchTests-Info.plist">
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+</dict>
+</plist>
+</file>
+
+<file path="NotionSketch/NotionContainerParser.swift">
+import Foundation
+
+// MARK: - Container Reference
+
+/// Represents the type of Notion container the app is using.
+enum NotionContainerRef: Equatable {
+    case database(id: String)
+    case dataSource(id: String)
+
+    var id: String {
+        switch self {
+        case .database(let id), .dataSource(let id): return id
+        }
+    }
+
+    var isDataSource: Bool {
+        switch self {
+        case .dataSource: return true
+        case .database: return false
+        }
+    }
+}
+
+// MARK: - Resolved Container
+
+struct ResolvedNotionContainer: Equatable {
+    let ref: NotionContainerRef
+    let fallbackDatabaseID: String?
+}
+
+// MARK: - Shared Parser
+
+enum NotionContainerParser {
+    /// Normalizes a raw ID string to lowercase dashed UUID form (8-4-4-4-12).
+    /// Returns nil if the value is not a valid 32-character hex string.
+    static func normalizedID(_ input: String) -> String? {
+        var hex = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        hex = hex.replacingOccurrences(of: "-", with: "")
+
+        guard hex.count == 32 else { return nil }
+        guard hex.allSatisfy(\.isHexDigit) else { return nil }
+
+        let lower = hex.lowercased()
+        let c = Array(lower)
+        return "\(String(c[0..<8]))-\(String(c[8..<12]))-\(String(c[12..<16]))-\(String(c[16..<20]))-\(String(c[20..<32]))"
+    }
+
+    /// Parses raw user input into a NotionContainerRef.
+    /// Returns nil for malformed, short, non-hex, unrelated-host, or arbitrary text input.
+    static func parse(_ input: String) -> NotionContainerRef? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Attempt URL parsing
+        if let components = URLComponents(string: trimmed),
+           let scheme = components.scheme,
+           let host = components.host {
+
+            // Require http or https
+            guard scheme.lowercased() == "http" || scheme.lowercased() == "https" else { return nil }
+
+            // Require notion.so or *.notion.so host (case-insensitive)
+            let lowerHost = host.lowercased()
+            guard lowerHost == "notion.so" || lowerHost.hasSuffix(".notion.so") else { return nil }
+
+            // 1. Check query items FIRST (ds= or data_source=)
+            if let queryItems = components.queryItems {
+                for item in queryItems {
+                    if item.name == "ds" || item.name == "data_source" {
+                        if let value = item.value, !value.isEmpty,
+                           let normalized = normalizedID(value) {
+                            return .dataSource(id: normalized)
+                        }
+                    }
+                }
+            }
+
+            // 2. Check path segments for data_sources/<id> or data-source/<id>
+            let path = components.path
+            let segments = path.split(separator: "/").compactMap { String($0).trimmingCharacters(in: .whitespaces) }
+            let nonEmptySegments = segments.filter { !$0.isEmpty }
+
+            for (index, segment) in nonEmptySegments.enumerated() {
+                if segment == "data_sources" || segment == "data-source" {
+                    if index + 1 < nonEmptySegments.count,
+                       let normalized = normalizedID(nonEmptySegments[index + 1]) {
+                        return .dataSource(id: normalized)
+                    }
+                }
+            }
+
+            // 3. Parse final path component as database ID (with titled-component suffix fallbacks)
+            if let lastSegment = nonEmptySegments.last {
+                // 3a. Direct match
+                if let normalized = normalizedID(lastSegment) {
+                    return .database(id: normalized)
+                }
+                // 3b. Titled component ending in dashed UUID (36 chars)
+                if lastSegment.count >= 36,
+                   let normalized = normalizedID(String(lastSegment.suffix(36))) {
+                    return .database(id: normalized)
+                }
+                // 3c. Titled component ending in undashed 32-char hex ID
+                if lastSegment.count >= 32,
+                   let normalized = normalizedID(String(lastSegment.suffix(32))) {
+                    return .database(id: normalized)
+                }
+            }
+
+            // URL was valid notion.so but no parsable ID found
+            return nil
+        }
+
+        // Non-URL input: try to normalize as a database ID
+        if let normalized = normalizedID(trimmed) {
+            return .database(id: normalized)
+        }
+
+        return nil
+    }
+}
+</file>
+
+<file path="NotionSketchTests/MockURLProtocol.swift">
+import Foundation
+import XCTest
+
+/// Mock URLProtocol that intercepts requests, records them, and returns predefined responses.
+final class MockURLProtocol: URLProtocol {
+
+    typealias Handler = (URLRequest) throws -> (HTTPURLResponse, Data)
+
+    private static let lock = NSLock()
+
+    nonisolated(unsafe) private static var handler: Handler?
+    nonisolated(unsafe) private(set) static var requests: [URLRequest] = []
+
+    static func setHandler(_ handler: Handler?) {
+        lock.lock()
+        defer { lock.unlock() }
+        Self.handler = handler
+    }
+
+    static func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+        handler = nil
+        requests.removeAll()
+    }
+
+    static func snapshotRequests() -> [URLRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return requests
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        MockURLProtocol.lock.lock()
+        MockURLProtocol.requests.append(request)
+        let currentHandler = MockURLProtocol.handler
+        MockURLProtocol.lock.unlock()
+
+        guard let handler = currentHandler else {
+            XCTFail("MockURLProtocol received a request without a configured handler")
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {
+        // No-op for mock
+    }
+}
+</file>
+
+<file path="NotionSketchTests/NotionContainerParserTests.swift">
+import XCTest
+@testable import NotionSketch
+
+final class NotionContainerParserTests: XCTestCase {
+
+    // MARK: - normalizedID
+
+    func testNormalizedIDStandardUUID() {
+        let input = "11111111-1111-1111-1111-111111111111"
+        XCTAssertEqual(NotionContainerParser.normalizedID(input), "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testNormalizedIDHexOnly() {
+        let input = "11111111111111111111111111111111"
+        XCTAssertEqual(NotionContainerParser.normalizedID(input), "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testNormalizedIDUppercaseHex() {
+        let input = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+        XCTAssertEqual(NotionContainerParser.normalizedID(input), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    }
+
+    func testNormalizedIDShortInput() {
+        XCTAssertNil(NotionContainerParser.normalizedID("12345"))
+    }
+
+    func testNormalizedIDNonHex() {
+        XCTAssertNil(NotionContainerParser.normalizedID("zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"))
+    }
+
+    func testNormalizedIDWithWhitespace() {
+        let input = " 11111111-1111-1111-1111-111111111111 "
+        XCTAssertEqual(NotionContainerParser.normalizedID(input), "11111111-1111-1111-1111-111111111111")
+    }
+
+    // MARK: - parse Database ID
+
+    func testParseDatabaseIDStandard() {
+        let input = "11111111-1111-1111-1111-111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParseDatabaseIDHexOnly() {
+        let input = "11111111111111111111111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParseDatabaseIDFromNotionURL() {
+        let input = "https://notion.so/11111111-1111-1111-1111-111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParseDatabaseIDFromWorkspaceURL() {
+        let input = "https://myteam.notion.so/11111111-1111-1111-1111-111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    // MARK: - Titled URL parsing (suffix fallbacks)
+
+    func testParseTitledURLWithUndashedSuffix() {
+        let input = "https://www.notion.so/My-Sketches-11111111111111111111111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case for titled URL with undashed suffix")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParseTitledURLWithDashedSuffix() {
+        let input = "https://www.notion.so/My-Sketches-11111111-1111-1111-1111-111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case for titled URL with dashed suffix")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParsePercentEncodedTitledURL() {
+        let input = "https://www.notion.so/My%20Sketches-11111111111111111111111111111111"
+        guard case .database(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected database case for percent-encoded titled URL")
+            return
+        }
+        XCTAssertEqual(id, "11111111-1111-1111-1111-111111111111")
+    }
+
+    func testParseTitledURLNonNotionHostReturnsNil() {
+        let input = "https://example.com/My-Sketches-11111111111111111111111111111111"
+        XCTAssertNil(NotionContainerParser.parse(input))
+    }
+
+    func testParseNonURLTextEndingInHexReturnsNil() {
+        let input = "some random text ending in 11111111111111111111111111111111"
+        XCTAssertNil(NotionContainerParser.parse(input))
+    }
+
+    // MARK: - Query precedence over database path
+
+    func testParseQueryDSPrecedenceOverDatabasePath() {
+        let input = "https://www.notion.so/11111111-1111-1111-1111-111111111111?ds=44444444-4444-4444-4444-444444444444"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case, ds query should take precedence")
+            return
+        }
+        XCTAssertEqual(id, "44444444-4444-4444-4444-444444444444")
+    }
+
+    func testParseQueryDataSourcePrecedenceOverDatabasePath() {
+        let input = "https://www.notion.so/11111111-1111-1111-1111-111111111111?data_source=44444444-4444-4444-4444-444444444444"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case, data_source query should take precedence")
+            return
+        }
+        XCTAssertEqual(id, "44444444-4444-4444-4444-444444444444")
+    }
+
+    // MARK: - parse Data Source ID
+
+    func testParseDataSourceQueryParam() {
+        let input = "https://notion.so/data_sources?ds=22222222-2222-2222-2222-222222222222"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case")
+            return
+        }
+        XCTAssertEqual(id, "22222222-2222-2222-2222-222222222222")
+    }
+
+    func testParseDataSourceQueryParamAltName() {
+        let input = "https://notion.so/page?data_source=22222222-2222-2222-2222-222222222222"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case")
+            return
+        }
+        XCTAssertEqual(id, "22222222-2222-2222-2222-222222222222")
+    }
+
+    func testParseDataSourcePathSegment() {
+        let input = "https://notion.so/data_sources/22222222-2222-2222-2222-222222222222"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case")
+            return
+        }
+        XCTAssertEqual(id, "22222222-2222-2222-2222-222222222222")
+    }
+
+    func testParseDataSourcePathSegmentHyphenated() {
+        let input = "https://notion.so/data-source/22222222-2222-2222-2222-222222222222"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case")
+            return
+        }
+        XCTAssertEqual(id, "22222222-2222-2222-2222-222222222222")
+    }
+
+    func testParseQueryPrecedenceOverDatabasePath() {
+        let input = "https://notion.so/11111111-1111-1111-1111-111111111111?ds=44444444-4444-4444-4444-444444444444"
+        guard case .dataSource(let id) = NotionContainerParser.parse(input) else {
+            XCTFail("Expected dataSource case, query should take precedence")
+            return
+        }
+        XCTAssertEqual(id, "44444444-4444-4444-4444-444444444444")
+    }
+
+    // MARK: - Invalid inputs
+
+    func testParseEmptyInput() {
+        XCTAssertNil(NotionContainerParser.parse(""))
+    }
+
+    func testParseWhitespaceOnly() {
+        XCTAssertNil(NotionContainerParser.parse("   "))
+    }
+
+    func testParsePlainWord() {
+        XCTAssertNil(NotionContainerParser.parse("mydatabase"))
+    }
+
+    func testParseShortHex() {
+        XCTAssertNil(NotionContainerParser.parse("12345"))
+    }
+
+    func testParseNonNotionHost() {
+        XCTAssertNil(NotionContainerParser.parse("https://example.com/11111111-1111-1111-1111-111111111111"))
+    }
+
+    func testParseNotionURLWithoutID() {
+        XCTAssertNil(NotionContainerParser.parse("https://notion.so"))
+    }
+
+    // MARK: - ContainerRef properties
+
+    func testContainerRefID() {
+        XCTAssertEqual(NotionContainerRef.database(id: "abc").id, "abc")
+        XCTAssertEqual(NotionContainerRef.dataSource(id: "def").id, "def")
+    }
+
+    func testContainerRefIsDataSource() {
+        XCTAssertFalse(NotionContainerRef.database(id: "abc").isDataSource)
+        XCTAssertTrue(NotionContainerRef.dataSource(id: "def").isDataSource)
+    }
+
+    func testContainerRefEquatable() {
+        XCTAssertEqual(NotionContainerRef.database(id: "a"), NotionContainerRef.database(id: "a"))
+        XCTAssertEqual(NotionContainerRef.dataSource(id: "b"), NotionContainerRef.dataSource(id: "b"))
+        XCTAssertNotEqual(NotionContainerRef.database(id: "a"), NotionContainerRef.dataSource(id: "a"))
+    }
+
+    // MARK: - ResolvedNotionContainer equatability
+
+    func testResolvedContainerEquatable() {
+        let a = ResolvedNotionContainer(ref: .database(id: "1"), fallbackDatabaseID: nil)
+        let b = ResolvedNotionContainer(ref: .database(id: "1"), fallbackDatabaseID: nil)
+        XCTAssertEqual(a, b)
+
+        let c = ResolvedNotionContainer(ref: .database(id: "1"), fallbackDatabaseID: "2")
+        XCTAssertNotEqual(a, c)
+    }
+}
+</file>
+
+<file path="NotionSketchTests/NotionServiceContainerTests.swift">
+import XCTest
+@testable import NotionSketch
+
+final class NotionServiceContainerTests: XCTestCase {
+
+    // MARK: - Fixed IDs
+
+    static let databaseID = "11111111-1111-1111-1111-111111111111"
+    static let dataSourceID = "22222222-2222-2222-2222-222222222222"
+    static let pageID = "33333333-3333-3333-3333-333333333333"
+    static let queryDataSourceID = "44444444-4444-4444-4444-444444444444"
+
+    // MARK: - Container URLs (parseable by NotionContainerParser)
+
+    static var databaseURL: String { "https://www.notion.so/\(Self.databaseID)" }
+    static var dataSourceURL: String { "https://www.notion.so/data-source/\(Self.dataSourceID)" }
+
+    // MARK: - Helpers
+
+    private var service: NotionService!
+    private var token: String!
+    private var mockSession: URLSession!
+
+    override func setUp() async throws {
+        try await super.setUp()
+        MockURLProtocol.reset()
+        token = "test_token_\(UUID().uuidString)"
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockURLProtocol.self]
+        mockSession = URLSession(configuration: config)
+        service = NotionService(
+            session: mockSession,
+            tokenOverride: self.token,
+            containerInputOverride: nil
+        )
+    }
+
+    override func tearDown() {
+        MockURLProtocol.reset()
+        service = nil
+        mockSession = nil
+        token = nil
+        super.tearDown()
+    }
+
+    private func makeService(containerInput: String? = nil) -> NotionService {
+        NotionService(
+            session: mockSession,
+            tokenOverride: self.token,
+            containerInputOverride: containerInput
+        )
+    }
+
+    private func discoveryJSON(dataSourceID: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "data_sources": [["id": dataSourceID, "name": "DS"]]
+        ], options: [])
+    }
+
+    private func discoveryJSONEmpty() -> Data {
+        try! JSONSerialization.data(withJSONObject: ["data_sources": []], options: [])
+    }
+
+    private func dbSchemaJSON(titleProp: String = "Name") -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "properties": [titleProp: ["type": "title"]]
+        ], options: [])
+    }
+
+    private func dsSchemaJSON(titleProp: String = "Name") -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "properties": [titleProp: ["type": "title"]]
+        ], options: [])
+    }
+
+    private func emptyQueryData() -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "results": [],
+            "has_more": false
+        ], options: [])
+    }
+
+    private func queryWithPageData(pageID: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "results": [["id": pageID, "archived": false]],
+            "has_more": false
+        ], options: [])
+    }
+
+    private func createPageResponse(id: String) -> Data {
+        try! JSONSerialization.data(withJSONObject: ["id": id], options: [])
+    }
+
+    // MARK: - A) resolveSketchesContainer with database ref → discovers data source
+
+    func testA_ResolveSketchesWithDatabaseDiscoversDataSource() async throws {
+        service = makeService(containerInput: Self.databaseURL)
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Authorization")?.hasPrefix("Bearer ") == true)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSON(dataSourceID: Self.dataSourceID))
+        }
+
+        let resolved = try await service.resolveSketchesContainer()
+        XCTAssertEqual(resolved.ref, .dataSource(id: Self.dataSourceID))
+        XCTAssertEqual(resolved.fallbackDatabaseID, Self.databaseID)
+    }
+
+    // MARK: - B) resolveSketchesContainer 404 discovery fallback → stays database
+
+    func testB_ResolveSketchesDiscovery404FallsBackToDatabase() async throws {
+        service = makeService(containerInput: Self.databaseURL)
+
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+            return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "1.1", headerFields: nil)!, Data())
+        }
+
+        let resolved = try await service.resolveSketchesContainer()
+        XCTAssertEqual(resolved.ref, .database(id: Self.databaseID))
+        XCTAssertEqual(resolved.fallbackDatabaseID, Self.databaseID)
+    }
+
+    // MARK: - C) resolveSketchesContainer with data source ref → no discovery call
+
+    func testC_ResolveSketchesWithDataSourceNoDiscovery() async throws {
+        service = makeService(containerInput: Self.dataSourceURL)
+
+        let resolved = try await service.resolveSketchesContainer()
+        XCTAssertEqual(resolved.ref, .dataSource(id: Self.dataSourceID))
+        XCTAssertNil(resolved.fallbackDatabaseID)
+
+        // No HTTP call should have been made
+        XCTAssertTrue(MockURLProtocol.snapshotRequests().isEmpty)
+    }
+
+    // MARK: - D) getDataSourceTitlePropertyName → GET /v1/data_sources/{id} with 2025-09-03
+
+    func testD_GetDataSourceTitlePropertyName() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Title"))
+        }
+
+        let propName = await service.getDataSourceTitlePropertyName(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(propName, "Title")
+    }
+
+    // MARK: - E) Database schema lookup → GET /v1/databases/{id} with 2022-06-28
+
+    func testE_CreatePageInDatabaseRoutesCorrectly() async throws {
+        service = makeService(containerInput: Self.databaseURL)
+
+        // createPageInDatabase internally calls resolveSketchesContainer (discovery),
+        // then schema lookup, then page creation. Discovery returns empty → stays database.
+        var callCount = 0
+        MockURLProtocol.handler = { request in
+            defer { callCount += 1 }
+            switch callCount {
+            case 0:
+                // Discovery call (2025-09-03) - return empty so it stays as database
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSONEmpty())
+            case 1:
+                // Schema call (2022-06-28) - for title property name
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dbSchemaJSON(titleProp: "Name"))
+            case 2:
+                // Page creation with database parent
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/pages")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.createPageResponse(id: Self.pageID))
+            default:
+                XCTFail("Unexpected call \(callCount)")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
+        }
+
+        let pageID = try await service.createPageInDatabase(title: "Test Page")
+        XCTAssertEqual(pageID, Self.pageID)
+    }
+
+    // MARK: - F) DataSource creation fallback via createPageInDatabase
+
+    func testF_CreatePageRoutesToDataSourceWhenDiscovered() async throws {
+        service = makeService(containerInput: Self.databaseURL)
+
+        // createPageInDatabase: discovery (DB→DS), DS schema lookup, page creation with data_source parent
+        var callCount = 0
+        MockURLProtocol.handler = { request in
+            defer { callCount += 1 }
+            switch callCount {
+            case 0:
+                // Discovery: database → data source
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSON(dataSourceID: Self.dataSourceID))
+            case 1:
+                // DS schema lookup (for title property name)
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Title"))
+            case 2:
+                // Page creation with data_source parent
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/pages")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                if let bodyData = request.httpBody ?? request.allHTTPHeaderFields?["X-Mock-Body"]?.data(using: .utf8),
+                   let body = try? JSONSerialization.jsonObject(with: bodyData) as? [String: Any],
+                   let parent = body["parent"] as? [String: String] {
+                    XCTAssertEqual(parent["type"], "data_source_id")
+                } else {
+                    // Body not available via URLProtocol, verify method and path are correct
+                    XCTAssertEqual(request.httpMethod, "POST")
+                }
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.createPageResponse(id: Self.pageID))
+            default:
+                XCTFail("Unexpected call \(callCount)")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
+        }
+
+        let pageID = try await service.createPageInDatabase(title: "Test")
+        XCTAssertEqual(pageID, Self.pageID)
+    }
+
+    // MARK: - G) Direct data source input bypasses discovery
+
+    func testG_DirectDataSourceInputBypassesDiscovery() async throws {
+        service = makeService(containerInput: Self.dataSourceURL)
+
+        // When input is already a data source URL, no discovery needed.
+        var callCount = 0
+        MockURLProtocol.handler = { request in
+            defer { callCount += 1 }
+            switch callCount {
+            case 0:
+                // DS schema lookup (for title property name) - no discovery call
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Title"))
+            case 1:
+                // Page creation with data_source parent
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/pages")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.createPageResponse(id: Self.pageID))
+            default:
+                XCTFail("Unexpected call \(callCount)")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
+        }
+
+        let pageID = try await service.createPageInDatabase(title: "Test")
+        XCTAssertEqual(pageID, Self.pageID)
+    }
+
+    // MARK: - H) queryActivePageIDs with data source ref → POST /v1/data_sources/{id}/query
+
+    func testH_QueryActivePageIDsDataSource() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.queryDataSourceID)/query")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.queryWithPageData(pageID: Self.pageID))
+        }
+
+        let pageIDs = try await service.queryActivePageIDs(ref: .dataSource(id: Self.queryDataSourceID))
+        XCTAssertEqual(pageIDs, [Self.pageID])
+    }
+
+    // MARK: - I) queryActivePageIDs with database ref → POST /v1/databases/{id}/query
+
+    func testI_QueryActivePageIDsDatabase() async throws {
+        MockURLProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "POST")
+            XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)/query")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.emptyQueryData())
+        }
+
+        let pageIDs = try await service.queryActivePageIDs(ref: .database(id: Self.databaseID))
+        XCTAssertTrue(pageIDs.isEmpty)
+    }
+
+    // MARK: - J) Request recording verification
+
+    func testJ_RequestsRecordedByMockURLProtocol() async throws {
+        MockURLProtocol.handler = { request in
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.emptyQueryData())
+        }
+
+        _ = try await service.queryActivePageIDs(ref: .database(id: Self.databaseID))
+        let recorded = MockURLProtocol.snapshotRequests()
+        XCTAssertEqual(recorded.count, 1)
+        XCTAssertEqual(recorded[0].url?.path, "/v1/databases/\(Self.databaseID)/query")
+        XCTAssertTrue(recorded[0].value(forHTTPHeaderField: "Authorization")?.hasPrefix("Bearer ") == true)
+    }
+
+    // MARK: - Not configured error
+
+    func testNotConfiguredThrowsError() async throws {
+        let emptyService = NotionService(tokenOverride: "")
+
+        do {
+            _ = try await emptyService.resolveSketchesContainer()
+            XCTFail("Expected notConfigured error")
+        } catch {
+            // Expected
+        }
+    }
+
+}
+</file>
+
+<file path="NotionSketchTests/SettingsManagerTests.swift">
+import XCTest
+@testable import NotionSketch
+
+final class SettingsManagerTests: XCTestCase {
+
+    // MARK: - Helpers
+
+    private func makeDefaults() -> (defaults: UserDefaults, suiteName: String) {
+        let suiteName = "test_settings_\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        return (defaults, suiteName)
+    }
+
+    @MainActor
+    private func makeManager(defaults: UserDefaults) -> SettingsManager {
+        SettingsManager(defaults: defaults)
+    }
+
+    // MARK: - A) Raw URL persistence (trimmed, not UUID-replaced)
+
+    @MainActor
+    func testSetContainerInputPreservesRawURLTrimmed() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        let url = "https://www.notion.so/My-Sketches-11111111111111111111111111111111"
+        mgr.containerInput = url
+
+        XCTAssertEqual(mgr.containerInput, url)
+    }
+
+    // MARK: - B) Trims whitespace on set
+
+    @MainActor
+    func testSetContainerInputTrimsWhitespace() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        let raw = "  https://www.notion.so/11111111-1111-1111-1111-111111111111  "
+        mgr.containerInput = raw
+
+        XCTAssertEqual(defaults.string(forKey: "notion_container_input"), "https://www.notion.so/11111111-1111-1111-1111-111111111111")
+    }
+
+    // MARK: - C) Whitespace-only legacy key migrates to empty
+
+    @MainActor
+    func testWhitespaceOnlyLegacyKeyMigratedToEmptyNewKey() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        defaults.set("   ", forKey: "notion_database_id")
+        let mgr = makeManager(defaults: defaults)
+
+        XCTAssertEqual(mgr.containerInput, "")
+    }
+
+    // MARK: - D) Non-empty new key preserved without migration
+
+    @MainActor
+    func testNonEmptyNewKeyPreservedWithoutMigration() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let originalURL = "https://www.notion.so/11111111-1111-1111-1111-111111111111"
+        defaults.set(originalURL, forKey: "notion_container_input")
+
+        let mgr = makeManager(defaults: defaults)
+        XCTAssertEqual(mgr.containerInput, originalURL)
+    }
+
+    // MARK: - Invalid config rejection via isConfigured
+
+    @MainActor
+    func testIsConfiguredFalseForInvalidContainerInput() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        mgr.apiToken = "valid_token"
+        mgr.containerInput = "not-a-valid-id"
+
+        XCTAssertFalse(mgr.isConfigured)
+    }
+
+    @MainActor
+    func testIsConfiguredFalseForEmptyContainerInput() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        mgr.apiToken = "valid_token"
+
+        XCTAssertFalse(mgr.isConfigured)
+    }
+
+    @MainActor
+    func testIsConfiguredTrueForValidInput() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        mgr.apiToken = "valid_token"
+        mgr.containerInput = "11111111-1111-1111-1111-111111111111"
+
+        XCTAssertTrue(mgr.isConfigured)
+    }
+
+    // MARK: - Clear container input
+
+    @MainActor
+    func testClearContainerInput() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let mgr = makeManager(defaults: defaults)
+        mgr.containerInput = "https://notion.so/11111111-1111-1111-1111-111111111111"
+        mgr.containerInput = ""
+
+        XCTAssertEqual(mgr.containerInput, "")
+    }
+
+    // MARK: - Legacy databaseID key migration
+
+    @MainActor
+    func testLegacyDatabaseIDMigratedToContainerInput() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+
+        let legacyID = "11111111-1111-1111-1111-111111111111"
+        defaults.set(legacyID, forKey: "notion_database_id")
+
+        let mgr = makeManager(defaults: defaults)
+        XCTAssertEqual(mgr.containerInput, legacyID)
+    }
+}
+</file>
 
 <file path="Derived/InfoPlists/NotionSketch-Info.plist">
 <?xml version="1.0" encoding="UTF-8"?>
@@ -368,6 +1291,29 @@ public final class NotionSketchResources: NSObject {
 }
 // swiftformat:enable all
 // swiftlint:enable all
+</file>
+
+<file path="NotionSketch/Assets.xcassets/AccentColor.colorset/Contents.json">
+{
+    "colors": [
+        {
+            "idiom": "universal"
+        }
+    ],
+    "info": {
+        "author": "xcode",
+        "version": 1
+    }
+}
+</file>
+
+<file path="NotionSketch/Assets.xcassets/Contents.json">
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}
 </file>
 
 <file path="NotionSketch/Whiteboard/WhiteboardDocument.swift">
@@ -879,6 +1825,134 @@ enum WhiteboardZIndex {
 }
 </file>
 
+<file path="NotionSketch/LaunchScreen.storyboard">
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="22505" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22504"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        <capability name="System colors in document resources" minToolsVersion="11.0"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <scenes>
+        <!--View Controller-->
+        <scene sceneID="EHf-IW-A2E">
+            <objects>
+                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <subviews>
+                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="AppIconDisplay" translatesAutoresizingMaskIntoConstraints="NO" id="tGb-jL-0gY">
+                                <rect key="frame" x="146.66666666666666" y="326" width="100" height="100"/>
+                                <constraints>
+                                    <constraint firstAttribute="width" constant="100" id="1a2-b3-c4d"/>
+                                    <constraint firstAttribute="height" constant="100" id="5e6-f7-g8h"/>
+                                </constraints>
+                                <userDefinedRuntimeAttributes>
+                                    <!-- layer.cornerRadius removed -->
+                                </userDefinedRuntimeAttributes>
+                            </imageView>
+                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="NotionSketch" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="8h9-iJ-kLm">
+                                <rect key="frame" x="127.66666666666669" y="450" width="138" height="27"/>
+                                <fontDescription key="fontDescription" type="system" weight="semibold" pointSize="22"/>
+                                <nil key="textColor"/>
+                                <nil key="highlightedColor"/>
+                            </label>
+                        </subviews>
+                        <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
+                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
+                        <constraints>
+                            <constraint firstItem="tGb-jL-0gY" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" constant="-50" id="9j1-k2-l3m"/>
+                            <constraint firstItem="tGb-jL-0gY" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="A1B-2C-3D4"/>
+                            <constraint firstItem="8h9-iJ-kLm" firstAttribute="top" secondItem="tGb-jL-0gY" secondAttribute="bottom" constant="24" id="E5F-6G-7H8"/>
+                            <constraint firstItem="8h9-iJ-kLm" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="I9J-K0-LMN"/>
+                        </constraints>
+                    </view>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
+            </objects>
+            <point key="canvasLocation" x="52.671755725190835" y="374.64788732394368"/>
+        </scene>
+    </scenes>
+    <resources>
+        <image name="AppIconDisplay" width="1024" height="1024"/>
+        <systemColor name="systemBackgroundColor">
+            <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
+        </systemColor>
+    </resources>
+</document>
+</file>
+
+<file path="NotionSketch/SplashScreen.swift">
+import SwiftUI
+
+/// Branded splash screen shown while the app initializes.
+struct SplashScreen: View {
+
+    @State private var progress: CGFloat = 0.0
+
+    var body: some View {
+        ZStack {
+            Color(.systemBackground)
+                .ignoresSafeArea()
+
+            VStack(spacing: 24) {
+                // App icon
+                Image("AppIconDisplay")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 100, height: 100)
+                    .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
+
+                Text("NotionSketch")
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.primary)
+
+                // Progress Bar
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 200, height: 4)
+                    
+                    Capsule()
+                        .fill(Color.primary)
+                        .frame(width: progress * 200, height: 4)
+                }
+                .padding(.top, 8)
+            }
+            .onAppear {
+                withAnimation(.easeOut(duration: 0.6)) {
+                    progress = 1.0
+                }
+            }
+            // Matches LaunchScreen constraint: Image center is -50 from view center.
+            // Since Image is 100px, top half is 50px.
+            // VStack centers itself. To approximate the LaunchScreen layout:
+            // LaunchScreen: Image Center Y = View Center Y - 50.
+            //               Label Top = Image Bottom + 24.
+            //               Label Height ~27.
+            // Visual Center of this block is roughly: (Image(100) + Spacing(24) + Label(27)) / 2 = 75.5 from top.
+            // Image center is at 50 from top.
+            // So we need to shift this block so the image center lands at -50.
+            // Shift = -50 + (75.5 - 50) = -24.5 ??
+            // Let's just center it naturally; exact pixel match is hard across devices without GeometryReader.
+            // A slight shift up looks better optically anyway.
+            .offset(y: -20)
+        }
+    }
+}
+
+#Preview {
+    SplashScreen()
+}
+</file>
+
+<file path="NotionSketch.app/PkgInfo">
+APPL????
+</file>
+
 <file path="NotionSketch.xcodeproj/project.xcworkspace/contents.xcworkspacedata">
 <?xml version="1.0" encoding="UTF-8"?>
 <Workspace
@@ -912,6 +1986,20 @@ enum WhiteboardZIndex {
                ReferencedContainer = "container:NotionSketch.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9B5443515F3F71A79F800678"
+               BuildableName = "NotionSketchTests.xctest"
+               BlueprintName = "NotionSketchTests"
+               ReferencedContainer = "container:NotionSketch.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -920,6 +2008,17 @@ enum WhiteboardZIndex {
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9B5443515F3F71A79F800678"
+               BuildableName = "NotionSketchTests.xctest"
+               BlueprintName = "NotionSketchTests"
+               ReferencedContainer = "container:NotionSketch.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -1071,6 +2170,44 @@ if let rawData = complexString.data(using: .utf8) {
 }
 </file>
 
+<file path=".log_parser.py">
+import re
+import sys
+
+def parse_logs():
+    log_content = sys.stdin.read()
+    
+    # Matches: /path/to/file.swift:10:20: error: message
+    pattern = r"^([^:]+):(\d+):(\d+):\s+error:\s+(.+)$"
+    matches = re.finditer(pattern, log_content, re.MULTILINE)
+    
+    seen = set()
+    errors_found = False
+    
+    for match in matches:
+        file_path = match.group(1).strip()
+        line = match.group(2)
+        col = match.group(3)
+        msg = match.group(4).strip()
+        
+        # Create a unique key for deduplication
+        key = (file_path, line, msg)
+        
+        if key not in seen:
+            seen.add(key)
+            errors_found = True
+            # Print in a clean format
+            print(f"📄 {file_path}:{line}")
+            print(f"❌ {msg}")
+            print("-" * 40)
+
+    if not errors_found:
+        print("✅ No compilation errors found in the input.")
+
+if __name__ == "__main__":
+    parse_logs()
+</file>
+
 <file path="Project.swift">
 import ProjectDescription
 
@@ -1134,7 +2271,17 @@ let project = Project(
                     "TARGETED_DEVICE_FAMILY": .string("2"),
                 ]
             )
-        )
+        ),
+        .target(
+            name: "NotionSketchTests",
+            destinations: Destinations.iOS,
+            product: .unitTests,
+            bundleId: "com.notionsketch.tests",
+            deploymentTargets: .iOS("17.0"),
+            infoPlist: .default,
+            sources: ["NotionSketchTests/**"],
+            dependencies: [.target(name: "NotionSketch")]
+        ),
     ]
 )
 </file>
@@ -1188,22 +2335,40 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 </file>
 
-<file path="NotionSketch/Assets.xcassets/AccentColor.colorset/Contents.json">
+<file path="NotionSketch/Assets.xcassets/AppIcon.appiconset/Contents.json">
 {
-    "colors": [
-        {
-            "idiom": "universal"
-        }
-    ],
-    "info": {
-        "author": "xcode",
-        "version": 1
+  "images" : [
+    {
+      "filename" : "AppIcon-1024.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
     }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
 }
 </file>
 
-<file path="NotionSketch/Assets.xcassets/Contents.json">
+<file path="NotionSketch/Assets.xcassets/AppIconDisplay.imageset/Contents.json">
 {
+  "images" : [
+    {
+      "filename" : "AppIcon-1024.png",
+      "idiom" : "universal",
+      "scale" : "1x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "2x"
+    },
+    {
+      "idiom" : "universal",
+      "scale" : "3x"
+    }
+  ],
   "info" : {
     "author" : "xcode",
     "version" : 1
@@ -1258,132 +2423,128 @@ jobs:
 </plist>
 </file>
 
-<file path="NotionSketch/LaunchScreen.storyboard">
-<?xml version="1.0" encoding="UTF-8"?>
-<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="22505" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="01J-lp-oVM">
-    <device id="retina6_12" orientation="portrait" appearance="light"/>
-    <dependencies>
-        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22504"/>
-        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
-        <capability name="System colors in document resources" minToolsVersion="11.0"/>
-        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
-    </dependencies>
-    <scenes>
-        <!--View Controller-->
-        <scene sceneID="EHf-IW-A2E">
-            <objects>
-                <viewController id="01J-lp-oVM" sceneMemberID="viewController">
-                    <view key="view" contentMode="scaleToFill" id="Ze5-6b-2t3">
-                        <rect key="frame" x="0.0" y="0.0" width="393" height="852"/>
-                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                        <subviews>
-                            <imageView clipsSubviews="YES" userInteractionEnabled="NO" contentMode="scaleAspectFit" horizontalHuggingPriority="251" verticalHuggingPriority="251" image="AppIconDisplay" translatesAutoresizingMaskIntoConstraints="NO" id="tGb-jL-0gY">
-                                <rect key="frame" x="146.66666666666666" y="326" width="100" height="100"/>
-                                <constraints>
-                                    <constraint firstAttribute="width" constant="100" id="1a2-b3-c4d"/>
-                                    <constraint firstAttribute="height" constant="100" id="5e6-f7-g8h"/>
-                                </constraints>
-                                <userDefinedRuntimeAttributes>
-                                    <!-- layer.cornerRadius removed -->
-                                </userDefinedRuntimeAttributes>
-                            </imageView>
-                            <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="NotionSketch" textAlignment="natural" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="8h9-iJ-kLm">
-                                <rect key="frame" x="127.66666666666669" y="450" width="138" height="27"/>
-                                <fontDescription key="fontDescription" type="system" weight="semibold" pointSize="22"/>
-                                <nil key="textColor"/>
-                                <nil key="highlightedColor"/>
-                            </label>
-                        </subviews>
-                        <viewLayoutGuide key="safeArea" id="6Tk-OE-BBY"/>
-                        <color key="backgroundColor" systemColor="systemBackgroundColor"/>
-                        <constraints>
-                            <constraint firstItem="tGb-jL-0gY" firstAttribute="centerY" secondItem="Ze5-6b-2t3" secondAttribute="centerY" constant="-50" id="9j1-k2-l3m"/>
-                            <constraint firstItem="tGb-jL-0gY" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="A1B-2C-3D4"/>
-                            <constraint firstItem="8h9-iJ-kLm" firstAttribute="top" secondItem="tGb-jL-0gY" secondAttribute="bottom" constant="24" id="E5F-6G-7H8"/>
-                            <constraint firstItem="8h9-iJ-kLm" firstAttribute="centerX" secondItem="Ze5-6b-2t3" secondAttribute="centerX" id="I9J-K0-LMN"/>
-                        </constraints>
-                    </view>
-                </viewController>
-                <placeholder placeholderIdentifier="IBFirstResponder" id="iYj-Kq-Ea1" userLabel="First Responder" sceneMemberID="firstResponder"/>
-            </objects>
-            <point key="canvasLocation" x="52.671755725190835" y="374.64788732394368"/>
-        </scene>
-    </scenes>
-    <resources>
-        <image name="AppIconDisplay" width="1024" height="1024"/>
-        <systemColor name="systemBackgroundColor">
-            <color white="1" alpha="1" colorSpace="custom" customColorSpace="genericGamma22GrayColorSpace"/>
-        </systemColor>
-    </resources>
-</document>
-</file>
-
-<file path="NotionSketch/SplashScreen.swift">
+<file path="NotionSketch/NotionSketchApp.swift">
 import SwiftUI
+import SwiftData
 
-/// Branded splash screen shown while the app initializes.
-struct SplashScreen: View {
+@main
+struct NotionSketchApp: App {
 
-    @State private var progress: CGFloat = 0.0
-
-    var body: some View {
-        ZStack {
-            Color(.systemBackground)
-                .ignoresSafeArea()
-
-            VStack(spacing: 24) {
-                // App icon
-                Image("AppIconDisplay")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 100, height: 100)
-                    .shadow(color: .black.opacity(0.15), radius: 10, y: 4)
-
-                Text("NotionSketch")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(.primary)
-
-                // Progress Bar
-                ZStack(alignment: .leading) {
-                    Capsule()
-                        .fill(Color.secondary.opacity(0.2))
-                        .frame(width: 200, height: 4)
-                    
-                    Capsule()
-                        .fill(Color.primary)
-                        .frame(width: progress * 200, height: 4)
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .onOpenURL { url in
+                    SyncLogger.log("📱 App received URL (Top Level): \(url)")
                 }
-                .padding(.top, 8)
-            }
-            .onAppear {
-                withAnimation(.easeOut(duration: 0.6)) {
-                    progress = 1.0
-                }
-            }
-            // Matches LaunchScreen constraint: Image center is -50 from view center.
-            // Since Image is 100px, top half is 50px.
-            // VStack centers itself. To approximate the LaunchScreen layout:
-            // LaunchScreen: Image Center Y = View Center Y - 50.
-            //               Label Top = Image Bottom + 24.
-            //               Label Height ~27.
-            // Visual Center of this block is roughly: (Image(100) + Spacing(24) + Label(27)) / 2 = 75.5 from top.
-            // Image center is at 50 from top.
-            // So we need to shift this block so the image center lands at -50.
-            // Shift = -50 + (75.5 - 50) = -24.5 ??
-            // Let's just center it naturally; exact pixel match is hard across devices without GeometryReader.
-            // A slight shift up looks better optically anyway.
-            .offset(y: -20)
         }
+        .modelContainer(for: SketchDocument.self)
     }
 }
 
-#Preview {
-    SplashScreen()
+// MARK: - Network Monitor
+
+import Network
+import Observation
+
+@Observable
+@MainActor
+class NetworkMonitor {
+    static let shared = NetworkMonitor()
+    
+    var isConnected = true
+    private let monitor = NWPathMonitor()
+    private let queue = DispatchQueue(label: "NetworkMonitor")
+    
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] path in
+            Task { @MainActor in
+                self?.isConnected = path.status == .satisfied
+            }
+        }
+        monitor.start(queue: queue)
+    }
 }
 </file>
 
-<file path="NotionSketch.app/PkgInfo">
-APPL????
+<file path="NotionSketch/SyncLogger.swift">
+import Foundation
+
+/// Simple file-based logger for sync debugging.
+/// Writes to Documents/sync_log.txt on device.
+enum SyncLogger {
+
+    private static let fileName = "sync_log.txt"
+    private static let maxLogSize = 1024 * 1024 // 1MB
+
+    private static var logFileURL: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent(fileName)
+    }
+
+    /// Appends a timestamped line to the log file.
+    static func log(_ message: String) {
+        let timestamp = ISO8601DateFormatter().string(from: Date())
+        let line = "[\(timestamp)] \(message)\n"
+        print("[Sync] \(message)")
+
+        let url = logFileURL
+        
+        // Check size and rotate if needed
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? UInt64, size > maxLogSize {
+            rotateLog()
+        }
+
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            if let data = line.data(using: .utf8) {
+                handle.write(data)
+            }
+            handle.closeFile()
+        } else {
+            try? line.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+    
+    private static func rotateLog() {
+        // Simple rotation: Rename current to .old, delete previous .old
+        let url = logFileURL
+        let oldUrl = url.deletingPathExtension().appendingPathExtension("old.txt")
+        
+        try? FileManager.default.removeItem(at: oldUrl)
+        try? FileManager.default.moveItem(at: url, to: oldUrl)
+    }
+
+    /// Reads the tail of the log file to avoid main thread freeze.
+    static func readLog() -> String {
+        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else { return "(no log file)" }
+        let fileSize = handle.seekToEndOfFile()
+        let maxReadSize: UInt64 = 20 * 1024 // 20KB
+        
+        let startOffset = fileSize > maxReadSize ? fileSize - maxReadSize : 0
+        
+        do {
+            try handle.seek(toOffset: startOffset)
+            let data = handle.readDataToEndOfFile()
+            handle.closeFile()
+            
+            var text = String(data: data, encoding: .utf8) ?? "(binary log data)"
+            
+            // If we truncated, add a note
+            if startOffset > 0 {
+                text = "[... truncated first \(startOffset) bytes ...]\n" + text
+            }
+            return text
+        } catch {
+            return "Error reading log: \(error.localizedDescription)"
+        }
+    }
+
+    /// Clears the log.
+    static func clearLog() {
+        try? "".write(to: logFileURL, atomically: true, encoding: .utf8)
+    }
+}
 </file>
 
 <file path="NotionSketch.xcodeproj/xcshareddata/xcschemes/NotionSketch.xcscheme">
@@ -1415,9 +2576,19 @@ APPL????
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      disableMainThreadChecker = "YES">
+      shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "9B5443515F3F71A79F800678"
+               BuildableName = "NotionSketchTests.xctest"
+               BlueprintName = "NotionSketchTests"
+               ReferencedContainer = "container:NotionSketch.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -1468,125 +2639,102 @@ APPL????
 </Scheme>
 </file>
 
-<file path=".log_parser.py">
-import re
-import sys
-
-def parse_logs():
-    log_content = sys.stdin.read()
-    
-    # Matches: /path/to/file.swift:10:20: error: message
-    pattern = r"^([^:]+):(\d+):(\d+):\s+error:\s+(.+)$"
-    matches = re.finditer(pattern, log_content, re.MULTILINE)
-    
-    seen = set()
-    errors_found = False
-    
-    for match in matches:
-        file_path = match.group(1).strip()
-        line = match.group(2)
-        col = match.group(3)
-        msg = match.group(4).strip()
-        
-        # Create a unique key for deduplication
-        key = (file_path, line, msg)
-        
-        if key not in seen:
-            seen.add(key)
-            errors_found = True
-            # Print in a clean format
-            print(f"📄 {file_path}:{line}")
-            print(f"❌ {msg}")
-            print("-" * 40)
-
-    if not errors_found:
-        print("✅ No compilation errors found in the input.")
-
-if __name__ == "__main__":
-    parse_logs()
-</file>
-
-<file path="NotionSketch/Assets.xcassets/AppIcon.appiconset/Contents.json">
-{
-  "images" : [
-    {
-      "filename" : "AppIcon-1024.png",
-      "idiom" : "universal",
-      "platform" : "ios",
-      "size" : "1024x1024"
-    }
-  ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
-}
-</file>
-
-<file path="NotionSketch/Assets.xcassets/AppIconDisplay.imageset/Contents.json">
-{
-  "images" : [
-    {
-      "filename" : "AppIcon-1024.png",
-      "idiom" : "universal",
-      "scale" : "1x"
-    },
-    {
-      "idiom" : "universal",
-      "scale" : "2x"
-    },
-    {
-      "idiom" : "universal",
-      "scale" : "3x"
-    }
-  ],
-  "info" : {
-    "author" : "xcode",
-    "version" : 1
-  }
-}
-</file>
-
-<file path="NotionSketch/NotionSketchApp.swift">
+<file path="NotionSketch/ContentView.swift">
 import SwiftUI
 import SwiftData
 
-@main
-struct NotionSketchApp: App {
+/// Root view with split navigation: drawing list on the left, canvas on the right.
+struct ContentView: View {
 
-    var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .onOpenURL { url in
-                    SyncLogger.log("📱 App received URL (Top Level): \(url)")
+    @Environment(\.modelContext) private var modelContext
+    @Query private var sketches: [SketchDocument]
+    @State private var selectedSketch: SketchDocument?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var isReady = false
+
+    var body: some View {
+        ZStack {
+            NavigationStack {
+                DrawingListView(selectedSketch: $selectedSketch)
+                    .navigationTitle("NotionSketch")
+                    .navigationDestination(item: $selectedSketch) { sketch in
+                        CanvasDetailView(document: sketch)
+                            .navigationTitle(sketch.title)
+                            .navigationBarTitleDisplayMode(.inline)
+                    }
+            }
+            .onOpenURL { url in
+                handleDeepLink(url)
+            }
+            .onAppear {
+                // Start background sync on launch
+                Task {
+                    await NotionSyncManager.shared.syncLibrary(context: modelContext)
                 }
+                
+                // Give SwiftData and UI a moment to initialize
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    withAnimation(.easeOut(duration: 0.5)) {
+                        isReady = true
+                    }
+                }
+            }
+
+            // Splash overlay — covers content until ready
+            if !isReady {
+                SplashScreen()
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
-        .modelContainer(for: SketchDocument.self)
+    }
+
+    private func handleDeepLink(_ url: URL) {
+        SyncLogger.log("🔗 Received deep link: \(url.absoluteString)")
+        
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
+              components.scheme == "notionsketch",
+              components.host == "open",
+              let queryItems = components.queryItems,
+              let idString = queryItems.first(where: { $0.name == "id" })?.value,
+              let uuid = UUID(uuidString: idString)
+        else { 
+            SyncLogger.log("❌ Invalid deep link format")
+            return 
+        }
+        
+        if let sketch = sketches.first(where: { $0.id == uuid }) {
+            SyncLogger.log("✅ Found matching sketch: '\(sketch.title)' — Opening...")
+            selectedSketch = sketch
+        } else {
+            SyncLogger.log("❌ Sketch not found locally for ID: \(uuid)")
+        }
     }
 }
 
-// MARK: - Network Monitor
+/// Wrapper that owns the CanvasViewModel via @State so it persists across re-renders.
+private struct CanvasDetailView: View {
 
-import Network
-import Observation
+    let document: SketchDocument
+    @State private var viewModel: CanvasViewModel
 
-@Observable
-@MainActor
-class NetworkMonitor {
-    static let shared = NetworkMonitor()
-    
-    var isConnected = true
-    private let monitor = NWPathMonitor()
-    private let queue = DispatchQueue(label: "NetworkMonitor")
-    
-    private init() {
-        monitor.pathUpdateHandler = { [weak self] path in
-            Task { @MainActor in
-                self?.isConnected = path.status == .satisfied
-            }
-        }
-        monitor.start(queue: queue)
+    init(document: SketchDocument) {
+        self.document = document
+        self._viewModel = State(initialValue: CanvasViewModel(document: document))
     }
+
+    var body: some View {
+        CanvasView(viewModel: viewModel)
+            .id(document.id)
+            .task {
+                await viewModel.fetchRemoteProperties()
+            }
+    }
+}
+
+#Preview {
+    ContentView()
+        .modelContainer(for: SketchDocument.self, inMemory: true)
 }
 </file>
 
@@ -1779,87 +2927,6 @@ struct SettingsView: View {
 }
 </file>
 
-<file path="NotionSketch/SyncLogger.swift">
-import Foundation
-
-/// Simple file-based logger for sync debugging.
-/// Writes to Documents/sync_log.txt on device.
-enum SyncLogger {
-
-    private static let fileName = "sync_log.txt"
-    private static let maxLogSize = 1024 * 1024 // 1MB
-
-    private static var logFileURL: URL {
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        return docs.appendingPathComponent(fileName)
-    }
-
-    /// Appends a timestamped line to the log file.
-    static func log(_ message: String) {
-        let timestamp = ISO8601DateFormatter().string(from: Date())
-        let line = "[\(timestamp)] \(message)\n"
-        print("[Sync] \(message)")
-
-        let url = logFileURL
-        
-        // Check size and rotate if needed
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attrs[.size] as? UInt64, size > maxLogSize {
-            rotateLog()
-        }
-
-        if let handle = try? FileHandle(forWritingTo: url) {
-            handle.seekToEndOfFile()
-            if let data = line.data(using: .utf8) {
-                handle.write(data)
-            }
-            handle.closeFile()
-        } else {
-            try? line.write(to: url, atomically: true, encoding: .utf8)
-        }
-    }
-    
-    private static func rotateLog() {
-        // Simple rotation: Rename current to .old, delete previous .old
-        let url = logFileURL
-        let oldUrl = url.deletingPathExtension().appendingPathExtension("old.txt")
-        
-        try? FileManager.default.removeItem(at: oldUrl)
-        try? FileManager.default.moveItem(at: url, to: oldUrl)
-    }
-
-    /// Reads the tail of the log file to avoid main thread freeze.
-    static func readLog() -> String {
-        guard let handle = try? FileHandle(forReadingFrom: logFileURL) else { return "(no log file)" }
-        let fileSize = handle.seekToEndOfFile()
-        let maxReadSize: UInt64 = 20 * 1024 // 20KB
-        
-        let startOffset = fileSize > maxReadSize ? fileSize - maxReadSize : 0
-        
-        do {
-            try handle.seek(toOffset: startOffset)
-            let data = handle.readDataToEndOfFile()
-            handle.closeFile()
-            
-            var text = String(data: data, encoding: .utf8) ?? "(binary log data)"
-            
-            // If we truncated, add a note
-            if startOffset > 0 {
-                text = "[... truncated first \(startOffset) bytes ...]\n" + text
-            }
-            return text
-        } catch {
-            return "Error reading log: \(error.localizedDescription)"
-        }
-    }
-
-    /// Clears the log.
-    static func clearLog() {
-        try? "".write(to: logFileURL, atomically: true, encoding: .utf8)
-    }
-}
-</file>
-
 <file path="NotionSketch.xcodeproj/project.pbxproj">
 // !$*UTF8*$!
 {
@@ -1881,13 +2948,18 @@ enum SyncLogger {
 		5DA96ED565D035D908257001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37D0E64A1EDBFDBF2E351326 /* SettingsView.swift */; };
 		6C4D8A31C37A5FBCFB04C287 /* WhiteboardViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2BD7757E167B753AC88AF8ED /* WhiteboardViewModel.swift */; };
 		6EEA974EED814A7E95BD7A64 /* WhiteboardZIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68D8F232D6ABF3616FF8DA95 /* WhiteboardZIndex.swift */; };
+		6EEC932094382AFA3DDBC4EF /* NotionContainerParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = E61E43D3C6E79CD1810310B6 /* NotionContainerParser.swift */; };
 		7F60C89D08F22DF51DF54D8A /* TuistAssets+NotionSketch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6475D5A58003FF3DA85DF4FA /* TuistAssets+NotionSketch.swift */; };
 		8FC3D530FBA1DA9004F04E62 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */; };
 		985C1C9F731445949C8F7005 /* NotionSyncManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */; };
 		9B23635B0925F0DF4E8E4038 /* NotionSketchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF78410589456C14456E4889 /* NotionSketchApp.swift */; };
+		A526DABEB1D5B41C55C0C32C /* MockURLProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A646325F696B51C59D6B9205 /* MockURLProtocol.swift */; };
+		A68B18460BB0C71D802BB520 /* SettingsManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8693065AF54D2CDE1C4920C3 /* SettingsManagerTests.swift */; };
 		AB0D27246072CE31B45A2476 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7FE01D2225DD5282AFE09E9B /* Assets.xcassets */; };
 		D0C4EAC126BA816B825AC65A /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24FFE9171787702A3F0FCD03 /* CanvasView.swift */; };
 		DA620F054C483B856F0BCC7B /* NotionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD2740D8A78FB8F432E0B095 /* NotionService.swift */; };
+		DC17DDD6FCAC85718319AD2A /* NotionContainerParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04DC3DCAE5B0B41EE68D5A75 /* NotionContainerParserTests.swift */; };
+		E4976B4378747AD68BEE003B /* NotionServiceContainerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AEAD0F8845005B897F2EB440 /* NotionServiceContainerTests.swift */; };
 		F2DCFBED1B04CAA293EE1403 /* WhiteboardObjectKind.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0374025D071E45D008A6D930 /* WhiteboardObjectKind.swift */; };
 		F43D756FD89194C7520C10E4 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A045CF829CBF481DDA95F616 /* ContentView.swift */; };
 		FA5B312141A0EB184BD74CCB /* WhiteboardSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B7502FADB300B2991D34F5C /* WhiteboardSelection.swift */; };
@@ -1895,8 +2967,28 @@ enum SyncLogger {
 		FD68B44EBE7055639DEAFE4F /* WhiteboardObject.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9E13BA25958DEE1A4267194 /* WhiteboardObject.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		92EC10B551E79EF86070E7B6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C2A9EE31706F01F90C4C0A04 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 29C0AFE8671AFA29DD3BDB61;
+			remoteInfo = NotionSketch;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXCopyFilesBuildPhase section */
 		33CBAA7F2E231DB5CE42A509 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F9657B97DB397DC0D01016CC /* Embed Frameworks */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
@@ -1910,11 +3002,13 @@ enum SyncLogger {
 
 /* Begin PBXFileReference section */
 		0374025D071E45D008A6D930 /* WhiteboardObjectKind.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardObjectKind.swift; sourceTree = "<group>"; };
+		04DC3DCAE5B0B41EE68D5A75 /* NotionContainerParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionContainerParserTests.swift; sourceTree = "<group>"; };
 		24FFE9171787702A3F0FCD03 /* CanvasView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasView.swift; sourceTree = "<group>"; };
 		26DC6B26049B81526FEF9EF5 /* NotionSketch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NotionSketch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		278E1FA4E48129FF5A1DB817 /* SketchDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SketchDocument.swift; sourceTree = "<group>"; };
 		2BD7757E167B753AC88AF8ED /* WhiteboardViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardViewModel.swift; sourceTree = "<group>"; };
 		37D0E64A1EDBFDBF2E351326 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		39860654D325A71BC5B4736A /* NotionSketchTests-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "NotionSketchTests-Info.plist"; sourceTree = "<group>"; };
 		45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSyncManager.swift; sourceTree = "<group>"; };
 		471CA28803762420C166EDE7 /* SyncLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncLogger.swift; sourceTree = "<group>"; };
 		4B7502FADB300B2991D34F5C /* WhiteboardSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardSelection.swift; sourceTree = "<group>"; };
@@ -1924,19 +3018,31 @@ enum SyncLogger {
 		68D8F232D6ABF3616FF8DA95 /* WhiteboardZIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardZIndex.swift; sourceTree = "<group>"; };
 		7CC92BED257DD2BE103B72FA /* DrawingListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DrawingListView.swift; sourceTree = "<group>"; };
 		7FE01D2225DD5282AFE09E9B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		8693065AF54D2CDE1C4920C3 /* SettingsManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsManagerTests.swift; sourceTree = "<group>"; };
 		9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		A045CF829CBF481DDA95F616 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A0BDA833D6ABDA43540DD772 /* WhiteboardDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardDocument.swift; sourceTree = "<group>"; };
+		A646325F696B51C59D6B9205 /* MockURLProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockURLProtocol.swift; sourceTree = "<group>"; };
+		A8A9A50D56A5D10ADF2E3C6F /* NotionSketchTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotionSketchTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD2740D8A78FB8F432E0B095 /* NotionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionService.swift; sourceTree = "<group>"; };
+		AEAD0F8845005B897F2EB440 /* NotionServiceContainerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionServiceContainerTests.swift; sourceTree = "<group>"; };
 		B9E13BA25958DEE1A4267194 /* WhiteboardObject.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhiteboardObject.swift; sourceTree = "<group>"; };
 		BA5BD19E08CD896AA50BCA35 /* CanvasViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CanvasViewModel.swift; sourceTree = "<group>"; };
 		C1A7A8E87C96D930C9922DC8 /* SplashScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SplashScreen.swift; sourceTree = "<group>"; };
 		D3B6F222B69489CA8962732A /* NotionSketch-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "NotionSketch-Info.plist"; sourceTree = "<group>"; };
 		DF78410589456C14456E4889 /* NotionSketchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionSketchApp.swift; sourceTree = "<group>"; };
+		E61E43D3C6E79CD1810310B6 /* NotionContainerParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotionContainerParser.swift; sourceTree = "<group>"; };
 		FE3006C73EF42D85036C75BC /* TuistBundle+NotionSketch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TuistBundle+NotionSketch.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		9DAEF87EB20F6469C4D3C067 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D6A37D74F567B8A12190C5D0 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -1961,8 +3067,20 @@ enum SyncLogger {
 			children = (
 				0AFE612D4C16CA76753B6483 /* Derived */,
 				687FEEF3A90A6E469E38AC65 /* NotionSketch */,
+				60AF829496DC0887E8DFA404 /* NotionSketchTests */,
 			);
 			name = Project;
+			sourceTree = "<group>";
+		};
+		60AF829496DC0887E8DFA404 /* NotionSketchTests */ = {
+			isa = PBXGroup;
+			children = (
+				A646325F696B51C59D6B9205 /* MockURLProtocol.swift */,
+				04DC3DCAE5B0B41EE68D5A75 /* NotionContainerParserTests.swift */,
+				AEAD0F8845005B897F2EB440 /* NotionServiceContainerTests.swift */,
+				8693065AF54D2CDE1C4920C3 /* SettingsManagerTests.swift */,
+			);
+			path = NotionSketchTests;
 			sourceTree = "<group>";
 		};
 		687FEEF3A90A6E469E38AC65 /* NotionSketch */ = {
@@ -1975,6 +3093,7 @@ enum SyncLogger {
 				A045CF829CBF481DDA95F616 /* ContentView.swift */,
 				7CC92BED257DD2BE103B72FA /* DrawingListView.swift */,
 				9F4F58BD5C48094A76DF08A1 /* LaunchScreen.storyboard */,
+				E61E43D3C6E79CD1810310B6 /* NotionContainerParser.swift */,
 				AD2740D8A78FB8F432E0B095 /* NotionService.swift */,
 				DF78410589456C14456E4889 /* NotionSketchApp.swift */,
 				45D7D366066B6F90FF8989A0 /* NotionSyncManager.swift */,
@@ -2008,6 +3127,7 @@ enum SyncLogger {
 			isa = PBXGroup;
 			children = (
 				D3B6F222B69489CA8962732A /* NotionSketch-Info.plist */,
+				39860654D325A71BC5B4736A /* NotionSketchTests-Info.plist */,
 			);
 			path = InfoPlists;
 			sourceTree = "<group>";
@@ -2030,6 +3150,7 @@ enum SyncLogger {
 			isa = PBXGroup;
 			children = (
 				26DC6B26049B81526FEF9EF5 /* NotionSketch.app */,
+				A8A9A50D56A5D10ADF2E3C6F /* NotionSketchTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -2057,6 +3178,27 @@ enum SyncLogger {
 			productReference = 26DC6B26049B81526FEF9EF5 /* NotionSketch.app */;
 			productType = "com.apple.product-type.application";
 		};
+		9B5443515F3F71A79F800678 /* NotionSketchTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5C1DAA722A8FAA57EEA5F1F8 /* Build configuration list for PBXNativeTarget "NotionSketchTests" */;
+			buildPhases = (
+				E4C98ACC33E6D78C863DF223 /* Sources */,
+				FCBAC46135C4B0CC8ED6DD99 /* Resources */,
+				9DAEF87EB20F6469C4D3C067 /* Frameworks */,
+				F9657B97DB397DC0D01016CC /* Embed Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C0524FF56D4CEF31EC52D53D /* PBXTargetDependency */,
+			);
+			name = NotionSketchTests;
+			packageProductDependencies = (
+			);
+			productName = NotionSketchTests;
+			productReference = A8A9A50D56A5D10ADF2E3C6F /* NotionSketchTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -2065,6 +3207,9 @@ enum SyncLogger {
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				TargetAttributes = {
+					9B5443515F3F71A79F800678 = {
+						TestTargetID = 29C0AFE8671AFA29DD3BDB61;
+					};
 				};
 			};
 			buildConfigurationList = FBF844104E75374C5C1C69F8 /* Build configuration list for PBXProject "NotionSketch" */;
@@ -2081,6 +3226,7 @@ enum SyncLogger {
 			projectRoot = "";
 			targets = (
 				29C0AFE8671AFA29DD3BDB61 /* NotionSketch */,
+				9B5443515F3F71A79F800678 /* NotionSketchTests */,
 			);
 		};
 /* End PBXProject section */
@@ -2092,6 +3238,13 @@ enum SyncLogger {
 			files = (
 				AB0D27246072CE31B45A2476 /* Assets.xcassets in Resources */,
 				8FC3D530FBA1DA9004F04E62 /* LaunchScreen.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FCBAC46135C4B0CC8ED6DD99 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2108,6 +3261,7 @@ enum SyncLogger {
 				149DD5268AB1D298F9265D44 /* CanvasViewModel.swift in Sources */,
 				F43D756FD89194C7520C10E4 /* ContentView.swift in Sources */,
 				54A88895C7D591A7011356E2 /* DrawingListView.swift in Sources */,
+				6EEC932094382AFA3DDBC4EF /* NotionContainerParser.swift in Sources */,
 				DA620F054C483B856F0BCC7B /* NotionService.swift in Sources */,
 				9B23635B0925F0DF4E8E4038 /* NotionSketchApp.swift in Sources */,
 				985C1C9F731445949C8F7005 /* NotionSyncManager.swift in Sources */,
@@ -2126,9 +3280,63 @@ enum SyncLogger {
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		E4C98ACC33E6D78C863DF223 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A526DABEB1D5B41C55C0C32C /* MockURLProtocol.swift in Sources */,
+				DC17DDD6FCAC85718319AD2A /* NotionContainerParserTests.swift in Sources */,
+				E4976B4378747AD68BEE003B /* NotionServiceContainerTests.swift in Sources */,
+				A68B18460BB0C71D802BB520 /* SettingsManagerTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		C0524FF56D4CEF31EC52D53D /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = NotionSketch;
+			target = 29C0AFE8671AFA29DD3BDB61 /* NotionSketch */;
+			targetProxy = 92EC10B551E79EF86070E7B6 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		5C5228D8077580814148A687 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Derived/InfoPlists/NotionSketchTests-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.tests;
+				PRODUCT_NAME = NotionSketchTests;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					DEBUG,
+				);
+				SWIFT_COMPILATION_MODE = singlefile;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NotionSketch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NotionSketch";
+				TEST_TARGET_NAME = NotionSketch;
+			};
+			name = Debug;
+		};
 		7C34D9CCEC828FF7CD38DA18 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2256,6 +3464,36 @@ enum SyncLogger {
 			};
 			name = Debug;
 		};
+		F1BDA630C127ED18B6CE1510 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Derived/InfoPlists/NotionSketchTests-Info.plist";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-L$(DT_TOOLCHAIN_DIR)/usr/lib/swift/$(PLATFORM_NAME)",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.notionsketch.tests;
+				PRODUCT_NAME = NotionSketchTests;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NotionSketch.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NotionSketch";
+				TEST_TARGET_NAME = NotionSketch;
+			};
+			name = Release;
+		};
 		FA5B87A793B7940EA7CB9815 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2325,6 +3563,15 @@ enum SyncLogger {
 			buildConfigurations = (
 				E643444ECCACB6BC2C406EA4 /* Debug */,
 				BA5D6A7E330D196F647D6357 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5C1DAA722A8FAA57EEA5F1F8 /* Build configuration list for PBXNativeTarget "NotionSketchTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5C5228D8077580814148A687 /* Debug */,
+				F1BDA630C127ED18B6CE1510 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -2411,105 +3658,6 @@ NotionSketch.xcarchive/
 Payload/
 </file>
 
-<file path="NotionSketch/ContentView.swift">
-import SwiftUI
-import SwiftData
-
-/// Root view with split navigation: drawing list on the left, canvas on the right.
-struct ContentView: View {
-
-    @Environment(\.modelContext) private var modelContext
-    @Query private var sketches: [SketchDocument]
-    @State private var selectedSketch: SketchDocument?
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var isReady = false
-
-    var body: some View {
-        ZStack {
-            NavigationStack {
-                DrawingListView(selectedSketch: $selectedSketch)
-                    .navigationTitle("NotionSketch")
-                    .navigationDestination(item: $selectedSketch) { sketch in
-                        CanvasDetailView(document: sketch)
-                            .navigationTitle(sketch.title)
-                            .navigationBarTitleDisplayMode(.inline)
-                    }
-            }
-            .onOpenURL { url in
-                handleDeepLink(url)
-            }
-            .onAppear {
-                // Start background sync on launch
-                Task {
-                    await NotionSyncManager.shared.syncLibrary(context: modelContext)
-                }
-                
-                // Give SwiftData and UI a moment to initialize
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    withAnimation(.easeOut(duration: 0.5)) {
-                        isReady = true
-                    }
-                }
-            }
-
-            // Splash overlay — covers content until ready
-            if !isReady {
-                SplashScreen()
-                    .transition(.opacity)
-                    .zIndex(1)
-            }
-        }
-    }
-
-    private func handleDeepLink(_ url: URL) {
-        SyncLogger.log("🔗 Received deep link: \(url.absoluteString)")
-        
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: true),
-              components.scheme == "notionsketch",
-              components.host == "open",
-              let queryItems = components.queryItems,
-              let idString = queryItems.first(where: { $0.name == "id" })?.value,
-              let uuid = UUID(uuidString: idString)
-        else { 
-            SyncLogger.log("❌ Invalid deep link format")
-            return 
-        }
-        
-        if let sketch = sketches.first(where: { $0.id == uuid }) {
-            SyncLogger.log("✅ Found matching sketch: '\(sketch.title)' — Opening...")
-            selectedSketch = sketch
-        } else {
-            SyncLogger.log("❌ Sketch not found locally for ID: \(uuid)")
-        }
-    }
-}
-
-/// Wrapper that owns the CanvasViewModel via @State so it persists across re-renders.
-private struct CanvasDetailView: View {
-
-    let document: SketchDocument
-    @State private var viewModel: CanvasViewModel
-
-    init(document: SketchDocument) {
-        self.document = document
-        self._viewModel = State(initialValue: CanvasViewModel(document: document))
-    }
-
-    var body: some View {
-        CanvasView(viewModel: viewModel)
-            .id(document.id)
-            .task {
-                await viewModel.fetchRemoteProperties()
-            }
-    }
-}
-
-#Preview {
-    ContentView()
-        .modelContainer(for: SketchDocument.self, inMemory: true)
-}
-</file>
-
 <file path="NotionSketch/SettingsManager.swift">
 import Foundation
 import Observation
@@ -2522,6 +3670,8 @@ final class SettingsManager {
     // MARK: - Singleton
 
     static let shared = SettingsManager()
+
+    private let defaults: UserDefaults
 
     // MARK: - Keys
 
@@ -2537,142 +3687,81 @@ final class SettingsManager {
     // MARK: - Stored Properties
 
     var apiToken: String {
-        didSet { UserDefaults.standard.set(apiToken, forKey: Keys.apiToken) }
+        didSet { defaults.set(apiToken, forKey: Keys.apiToken) }
     }
-    
+
     var shortIoApiKey: String {
-        didSet { UserDefaults.standard.set(shortIoApiKey, forKey: Keys.shortIoApiKey) }
+        didSet { defaults.set(shortIoApiKey, forKey: Keys.shortIoApiKey) }
     }
-    
+
     var shortIoDomain: String {
-        didSet { UserDefaults.standard.set(shortIoDomain, forKey: Keys.shortIoDomain) }
+        didSet { defaults.set(shortIoDomain, forKey: Keys.shortIoDomain) }
     }
 
     /// Raw input from the user — could be a database URL, data source URL, or just an ID.
     var containerInput: String {
         didSet {
-            UserDefaults.standard.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
+            defaults.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
         }
     }
 
     /// The cleaned container ID (always a UUID with dashes). Used by legacy code.
     var databaseID: String {
-        SettingsManager.extractContainerID(from: containerInput)
+        NotionContainerParser.parse(containerInput)?.id ?? ""
     }
-    
+
     /// Raw input for the Connected Pages database.
     var connectedPagesDatabaseInput: String {
         didSet {
-            let extracted = SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
-            UserDefaults.standard.set(extracted, forKey: Keys.connectedPagesDatabaseID)
+            let extracted = Self.extractContainerID(from: connectedPagesDatabaseInput)
+            defaults.set(extracted, forKey: Keys.connectedPagesDatabaseID)
         }
     }
-    
+
     /// The cleaned Connected Pages database ID.
     var connectedPagesDatabaseID: String {
-        SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
+        Self.extractContainerID(from: connectedPagesDatabaseInput)
     }
 
     // MARK: - Computed
 
-    /// Returns `true` when both the API token and database ID are non-empty.
+    /// Returns `true` when both the API token and container are configured.
     var isConfigured: Bool {
         !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !databaseID.isEmpty
+        NotionContainerParser.parse(containerInput) != nil
     }
 
     // MARK: - Init
 
-    private init() {
-        self.apiToken = UserDefaults.standard.string(forKey: Keys.apiToken) ?? ""
-        self.shortIoApiKey = UserDefaults.standard.string(forKey: Keys.shortIoApiKey) ?? ""
-        self.shortIoDomain = UserDefaults.standard.string(forKey: Keys.shortIoDomain) ?? "short.gy"
-        // Migrate old database ID key to new container input key
-        if let legacyID = UserDefaults.standard.string(forKey: Keys.databaseID), !legacyID.isEmpty {
-            if UserDefaults.standard.string(forKey: Keys.containerInput) == nil {
-                UserDefaults.standard.set(legacyID, forKey: Keys.containerInput)
-            }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        self.apiToken = defaults.string(forKey: Keys.apiToken) ?? ""
+        self.shortIoApiKey = defaults.string(forKey: Keys.shortIoApiKey) ?? ""
+        self.shortIoDomain = defaults.string(forKey: Keys.shortIoDomain) ?? "short.gy"
+
+        // Read both old and new keys
+        let legacyValue = defaults.string(forKey: Keys.databaseID) ?? ""
+        var newValue = defaults.string(forKey: Keys.containerInput) ?? ""
+
+        // Migrate: if new value is missing, empty, or whitespace-only and legacy has content
+        let newTrimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyTrimmed = legacyValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if newTrimmed.isEmpty && !legacyTrimmed.isEmpty {
+            newValue = legacyValue
+            defaults.set(legacyValue, forKey: Keys.containerInput)
         }
-        self.containerInput = UserDefaults.standard.string(forKey: Keys.containerInput) ?? ""
-        self.connectedPagesDatabaseInput = UserDefaults.standard.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
+
+        self.containerInput = newValue
+        self.connectedPagesDatabaseInput = defaults.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
     }
 
-    // MARK: - URL Parsing
+    // MARK: - Compatibility Extraction
 
-    /// Extracts a Notion container ID (database or data source) from a pasted URL or raw ID string.
-    ///
-    /// Supports formats like:
-    /// - `https://www.notion.so/workspace/abc123def456...?v=...`
-    /// - `https://notion.so/abc123def456...`
-    /// - `https://www.notion.so/workspace/data-source/Title-abc123def456...`
-    /// - `abc123def456...` (raw 32-char hex)
-    /// - `abc123de-f456-7890-abcd-ef1234567890` (UUID with dashes)
+    /// Extracts a Notion container ID from input using the shared parser.
     static func extractContainerID(from input: String) -> String {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        // Try to parse as URL first
-        if let url = URL(string: trimmed), let host = url.host,
-           host.contains("notion") {
-            // The path looks like /workspace/Title-<id> or just /<id>
-            let path = url.path
-            // Remove leading slash and split by /
-            let segments = path.split(separator: "/")
-
-            // The last path segment contains the ID (possibly with a title prefix)
-            if let lastSegment = segments.last {
-                let segmentStr = String(lastSegment)
-                // The ID is the last 32 hex characters of the segment
-                if let id = extractHexID(from: segmentStr) {
-                    return formatAsUUID(id)
-                }
-            }
-        }
-
-        // Try to extract a 32-char hex ID directly from the input
-        if let id = extractHexID(from: trimmed) {
-            return formatAsUUID(id)
-        }
-
-        // Already a UUID with dashes? Return as-is if valid
-        let noDashes = trimmed.replacingOccurrences(of: "-", with: "")
-        if noDashes.count == 32 && noDashes.allSatisfy(\.isHexDigit) {
-            return formatAsUUID(noDashes)
-        }
-
-        // Can't parse — return the raw input so the error is visible to the user
-        return trimmed
-    }
-
-    /// Finds 32 consecutive hex characters at the end of a string.
-    private static func extractHexID(from string: String) -> String? {
-        // Remove any query parameters
-        let noQuery = string.components(separatedBy: "?").first ?? string
-
-        // Remove dashes to normalize
-        let noDashes = noQuery.replacingOccurrences(of: "-", with: "")
-
-        // Look for a 32-char hex sequence at the end
-        guard noDashes.count >= 32 else { return nil }
-
-        let suffix = String(noDashes.suffix(32))
-        guard suffix.allSatisfy(\.isHexDigit) else { return nil }
-
-        return suffix
-    }
-
-    /// Formats a 32-char hex string as a UUID with dashes (8-4-4-4-12).
-    private static func formatAsUUID(_ hex: String) -> String {
-        guard hex.count == 32 else { return hex }
-        let chars = Array(hex)
-        let parts = [
-            String(chars[0..<8]),
-            String(chars[8..<12]),
-            String(chars[12..<16]),
-            String(chars[16..<20]),
-            String(chars[20..<32])
-        ]
-        return parts.joined(separator: "-")
+        NotionContainerParser.parse(input)?.id ?? ""
     }
 }
 </file>
@@ -4244,27 +5333,6 @@ enum NotionConfig {
     static let baseURL = "https://api.notion.com/v1"
 }
 
-// MARK: - Container Reference
-
-/// Represents the type of Notion container the app is using.
-enum NotionContainerRef {
-    case database(id: String)
-    case dataSource(id: String)
-
-    var id: String {
-        switch self {
-        case .database(let id), .dataSource(let id): return id
-        }
-    }
-
-    var isDataSource: Bool {
-        switch self {
-        case .dataSource: return true
-        case .database: return false
-        }
-    }
-}
-
 // MARK: - Notion API Errors
 
 enum NotionServiceError: LocalizedError {
@@ -4291,7 +5359,7 @@ enum NotionServiceError: LocalizedError {
         case .decodingFailed(let reason):
             return "Failed to decode response: \(reason)"
         case .notConfigured:
-            return "Notion API token or Database ID not configured. Open Settings to add them."
+            return "Notion API token or container not configured."
         }
     }
 }
@@ -4590,8 +5658,17 @@ private struct SyncedFrom: Encodable {
 actor NotionService {
 
     private let session: URLSession
+    private let tokenOverride: String?
+    private let containerInputOverride: String?
 
-    init(session: URLSession? = nil) {
+    init(
+        session: URLSession? = nil,
+        tokenOverride: String? = nil,
+        containerInputOverride: String? = nil
+    ) {
+        self.tokenOverride = tokenOverride
+        self.containerInputOverride = containerInputOverride
+
         if let session = session {
             self.session = session
         } else {
@@ -4607,165 +5684,83 @@ actor NotionService {
 
     /// Reads the current API token from SettingsManager (must hop to MainActor).
     private func getToken() async -> String {
-        await MainActor.run { SettingsManager.shared.apiToken }
-    }
-
-    private func getDatabaseID() async -> String {
-        await MainActor.run { SettingsManager.shared.databaseID }
+        if let override = tokenOverride {
+            return override
+        }
+        return await MainActor.run { SettingsManager.shared.apiToken }
     }
 
     /// Reads the raw container input from SettingsManager.
     private func getContainerInput() async -> String {
-        await MainActor.run { SettingsManager.shared.containerInput }
-    }
-
-    /// Parses the raw user input into a container reference.
-    /// Detects data source URLs by path segments and query parameters.
-    private func parseContainerRef(from input: String) -> NotionContainerRef? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        // Try to parse as URL first to detect data source vs database
-        if let url = URL(string: trimmed), let host = url.host, host.contains("notion") {
-            let segments = url.path.split(separator: "/").map(String.init)
-
-            // Check path for data-source indicators: /data_sources/<id> or /data-source/<id>
-            var isDataSource = false
-            for (index, segment) in segments.enumerated() {
-                if segment == "data_sources" || segment == "data-source" {
-                    isDataSource = true
-                    // Try to extract ID from the next segment
-                    if index + 1 < segments.count, let id = Self.extractHexID(from: segments[index + 1]) {
-                        return .dataSource(id: Self.formatAsUUID(id))
-                    }
-                }
-            }
-
-            // Check query parameters for ds= or data_source=
-            if let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems {
-                for item in queryItems {
-                    if (item.name == "ds" || item.name == "data_source"), let value = item.value, !value.isEmpty {
-                        if let id = Self.extractHexID(from: value) {
-                            return .dataSource(id: Self.formatAsUUID(id))
-                        }
-                    }
-                }
-            }
-
-            // Not a data-source URL — try standard database URL parsing
-            if let lastSegment = segments.last {
-                if let id = Self.extractHexID(from: lastSegment) {
-                    return .database(id: Self.formatAsUUID(id))
-                }
-            }
+        if let override = containerInputOverride {
+            return override
         }
-
-        // Raw ID — treat as database (legacy behavior)
-        let noDashes = trimmed.replacingOccurrences(of: "-", with: "")
-        if noDashes.count == 32 && noDashes.allSatisfy(\.isHexDigit) {
-            return .database(id: Self.formatAsUUID(noDashes))
-        }
-
-        return nil
-    }
-
-    private struct ResolvedNotionContainer {
-        let ref: NotionContainerRef
-        let fallbackDatabaseID: String?
+        return await MainActor.run { SettingsManager.shared.containerInput }
     }
 
     /// Resolves the active container with optional database-to-data-source discovery.
-    private func resolveSketchesContainer() async throws -> ResolvedNotionContainer {
-        let input = await getContainerInput()
-
-        if let ref = parseContainerRef(from: input) {
-            switch ref {
-            case .dataSource(let id):
-                // Explicit data-source input — no fallback database
-                SyncLogger.log("📦 Resolved container: data_source (\(id)), no fallback database")
-                return ResolvedNotionContainer(ref: .dataSource(id: id), fallbackDatabaseID: nil)
-
-            case .database(let dbID):
-                // Database input — attempt data-source discovery via 2025 API
-                if let discovered = try await discoverDataSource(fromDatabase: dbID) {
-                    SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
-                    return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
-                }
-                SyncLogger.log("📦 Resolved container: database (\(dbID))")
-                return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
-            }
-        }
-
-        // Fallback: use the extracted ID as a database ID (legacy behavior)
-        let id = await getDatabaseID()
-        guard !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    internal func resolveSketchesContainer() async throws -> ResolvedNotionContainer {
+        let token = await getToken()
+        guard !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw NotionServiceError.notConfigured
         }
 
-        // Attempt data-source discovery for legacy input as well
-        if let discovered = try await discoverDataSource(fromDatabase: id) {
-            SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from legacy database (\(id))")
-            return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: id)
+        let input = await getContainerInput()
+        guard let ref = NotionContainerParser.parse(input) else {
+            throw NotionServiceError.notConfigured
         }
 
-        SyncLogger.log("📦 Resolved container: database (\(id))")
-        return ResolvedNotionContainer(ref: .database(id: id), fallbackDatabaseID: id)
+        switch ref {
+        case .dataSource(let id):
+            SyncLogger.log("📦 Resolved container: data_source (\(id)), no fallback database")
+            return ResolvedNotionContainer(ref: .dataSource(id: id), fallbackDatabaseID: nil)
+
+        case .database(let dbID):
+            if let discovered = try await discoverDataSource(fromDatabase: dbID) {
+                SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
+                return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
+            }
+            SyncLogger.log("📦 Resolved container: database (\(dbID))")
+            return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
+        }
     }
 
     /// Calls GET /v1/databases/{database_id} with 2025 version and returns the first data source ID.
-    private func discoverDataSource(fromDatabase databaseID: String) async throws -> String? {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
-            return nil
-        }
-
-        var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-        let (data, response) = try await safeRequest(request, context: "discoverDataSource")
-        let validatedData = try validate(data, response)
-
-        let decoded: DataSourceDiscoveryResponse
+    /// Returns nil on any failure mode (network, HTTP, decode, empty).
+    private func discoverDataSource(fromDatabase databaseID: String) async -> String? {
         do {
-            decoded = try JSONDecoder().decode(DataSourceDiscoveryResponse.self, from: validatedData)
+            guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
+                SyncLogger.log("⚠️ Data source discovery: invalid URL for database \(databaseID)")
+                return nil
+            }
+
+            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let (data, response) = try await safeRequest(request, context: "discoverDataSource")
+            let validatedData = try validate(data, response)
+
+            let decoded: DataSourceDiscoveryResponse
+            do {
+                decoded = try JSONDecoder().decode(DataSourceDiscoveryResponse.self, from: validatedData)
+            } catch {
+                SyncLogger.log("⚠️ Data source discovery decode failed for database \(databaseID): \(error.localizedDescription)")
+                return nil
+            }
+
+            guard let entries = decoded.data_sources, !entries.isEmpty else {
+                SyncLogger.log("ℹ️ No data sources found for database \(databaseID)")
+                return nil
+            }
+
+            let firstEntry = entries[0]
+            if let normalized = NotionContainerParser.normalizedID(firstEntry.id) {
+                return normalized
+            }
+            SyncLogger.log("⚠️ Discovered data source ID is not a valid UUID: \(firstEntry.id)")
+            return nil
         } catch {
-            SyncLogger.log("⚠️ Data source discovery decode failed for database \(databaseID): \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Data source discovery failed for database \(databaseID): \(error.localizedDescription)")
             return nil
         }
-
-        guard let entries = decoded.data_sources, !entries.isEmpty else {
-            SyncLogger.log("ℹ️ No data sources found for database \(databaseID)")
-            return nil
-        }
-
-        let firstEntry = entries[0]
-        // Format as dashed UUID if needed
-        let rawID = firstEntry.id.replacingOccurrences(of: "-", with: "")
-        if rawID.count == 32 && rawID.allSatisfy(\.isHexDigit) {
-            return Self.formatAsUUID(rawID)
-        }
-        return firstEntry.id
-    }
-
-    /// Finds 32 consecutive hex characters at the end of a string.
-    private static func extractHexID(from string: String) -> String? {
-        let noQuery = string.components(separatedBy: "?").first ?? string
-        let noDashes = noQuery.replacingOccurrences(of: "-", with: "")
-        guard noDashes.count >= 32 else { return nil }
-        let suffix = String(noDashes.suffix(32))
-        guard suffix.allSatisfy(\.isHexDigit) else { return nil }
-        return suffix
-    }
-
-    /// Formats a 32-char hex string as a UUID with dashes (8-4-4-4-12).
-    private static func formatAsUUID(_ hex: String) -> String {
-        guard hex.count == 32 else { return hex }
-        let chars = Array(hex)
-        let parts = [
-            String(chars[0..<8]),
-            String(chars[8..<12]),
-            String(chars[12..<16]),
-            String(chars[16..<20]),
-            String(chars[20..<32])
-        ]
-        return parts.joined(separator: "-")
     }
 
     // MARK: - Common Helpers
@@ -5041,38 +6036,43 @@ actor NotionService {
     private var dataSourceTitlePropertyNameCache: [String: String] = [:]
 
     /// Retrieves the data source schema and finds the name of the title property.
-    private func getDataSourceTitlePropertyName(dataSourceID: String) async throws -> String {
+    internal func getDataSourceTitlePropertyName(dataSourceID: String) async -> String {
         if let cached = dataSourceTitlePropertyNameCache[dataSourceID] {
             return cached
         }
 
-        guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
-            throw NotionServiceError.invalidURL
-        }
-
-        var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-        let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
-        let validatedData = try validate(data, response)
-
-        let decoded: DataSourceSchemaResponse
         do {
-            decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
+            guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
+                throw NotionServiceError.invalidURL
+            }
+
+            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
+            let validatedData = try validate(data, response)
+
+            let decoded: DataSourceSchemaResponse
+            do {
+                decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
+            } catch {
+                SyncLogger.log("⚠️ Data source title property decode failed for \(dataSourceID): \(error.localizedDescription)")
+                return "Name"
+            }
+
+            // Find the property whose type is "title"
+            for (name, property) in decoded.properties ?? [:] {
+                if property.type == "title" {
+                    dataSourceTitlePropertyNameCache[dataSourceID] = name
+                    return name
+                }
+            }
+
+            // Fallback — use "Name" (capitalized) as compatibility default
+            SyncLogger.log("⚠️ No title property found in data source \(dataSourceID), using 'Name' fallback")
+            return "Name"
         } catch {
             SyncLogger.log("⚠️ Data source title property discovery failed for \(dataSourceID): \(error.localizedDescription)")
             return "Name"
         }
-
-        // Find the property whose type is "title"
-        for (name, property) in decoded.properties ?? [:] {
-            if property.type == "title" {
-                dataSourceTitlePropertyNameCache[dataSourceID] = name
-                return name
-            }
-        }
-
-        // Fallback — use "Name" (capitalized) as compatibility default
-        SyncLogger.log("⚠️ No title property found in data source \(dataSourceID), using 'Name' fallback")
-        return "Name"
     }
 
     /// Retrieves the database and finds the name of the title property.
@@ -5520,10 +6520,15 @@ actor NotionService {
         var properties: [String: Any] = [:]
         
         if let title {
-             // We need the title property name.
-             let dbID = await getDatabaseID()
-             let titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
-             properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
+            let resolved = try await resolveSketchesContainer()
+            let titleProp: String
+            switch resolved.ref {
+            case .database(let dbID):
+                titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
+            case .dataSource(let dsID):
+                titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+            }
+            properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
         }
 
         if let ocrText {
@@ -5781,11 +6786,11 @@ actor NotionService {
         switch resolved.ref {
         case .dataSource(let id):
             do {
-                return try await queryContainer(ref: .dataSource(id: id), query: "")
+                return try await queryActivePageIDs(ref: .dataSource(id: id))
             } catch {
                 if let fallbackDB = resolved.fallbackDatabaseID {
                     SyncLogger.log("⚠️ Data source query failed (\(id)), falling back to database (\(fallbackDB)): \(error.localizedDescription)")
-                    return try await queryContainer(ref: .database(id: fallbackDB), query: "")
+                    return try await queryActivePageIDs(ref: .database(id: fallbackDB))
                 } else {
                     SyncLogger.log("❌ Data source query failed (\(id)), no safe database fallback available")
                     throw error
@@ -5793,19 +6798,41 @@ actor NotionService {
             }
 
         case .database(let id):
-            return try await queryContainer(ref: .database(id: id), query: "")
+            return try await queryActivePageIDs(ref: .database(id: id))
         }
     }
 
-    /// Container-aware query method that routes to the correct endpoint and API version.
-    func queryContainer(ref: NotionContainerRef, query: String) async throws -> Set<String> {
+    /// Returns a set of non-archived page IDs from the given container.
+    internal func queryActivePageIDs(ref: NotionContainerRef) async throws -> Set<String> {
         switch ref {
         case .dataSource(let id):
-            return try await queryPagesInDataSource(dataSourceID: id, query: query)
+            return try await queryPagesInDataSource(dataSourceID: id, query: "")
 
         case .database(let id):
-            return try await queryPagesInDatabase(databaseID: id, query: query)
+            return try await queryPagesInDatabase(databaseID: id, query: "")
         }
+    }
+
+    /// Title-filtered container query that returns structured page results.
+    func queryContainer(
+        ref: NotionContainerRef,
+        query: String
+    ) async throws -> [(id: String, title: String, icon: String?)] {
+        switch ref {
+        case .dataSource(let id):
+            return try await queryPagesInDataSourceWithTitle(dataSourceID: id, query: query)
+
+        case .database(let id):
+            return try await queryPagesInDatabaseWithTitle(databaseID: id, query: query)
+        }
+    }
+
+    /// Queries a specific database for pages matching a title query.
+    func queryDatabase(
+        databaseID: String,
+        query: String
+    ) async throws -> [(id: String, title: String, icon: String?)] {
+        try await queryContainer(ref: .database(id: databaseID), query: query)
     }
 
     /// Queries a database for active (non-archived) page IDs using legacy API.
@@ -6025,8 +7052,8 @@ actor NotionService {
     
     /// Queries the parent database to find the 'Connected Pages' relation target database ID.
     func fetchConnectedPagesTargetDatabaseID() async throws -> String? {
-        let databaseID = await getDatabaseID()
-        guard !databaseID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let resolved = try await resolveSketchesContainer()
+        guard case .database(let databaseID) = resolved.ref else { return nil }
         
         // Notion API will send a 302 redirect if the ID is a page ID but treated as a database ID? 
         // Or if the content is "Compact" vs "Full".
@@ -6073,30 +7100,34 @@ actor NotionService {
         return nil
     }
 
-    /// Queries a specific database for pages matching a title query.
-    func queryDatabase(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/search") else {
-            throw NotionServiceError.invalidURL
-        }
-
-        var request = try await authorizedRequest(url: url, method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // Re-attempting strictly with POST /v1/databases/{id}/query
-        // This is the standard way to search WITHIN a database.
-        guard let dbQueryUrl = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query") else {
-             throw NotionServiceError.invalidURL
-        }
-        
-        // We override the request
-        request = try await authorizedRequest(url: dbQueryUrl, method: "POST")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        // We need to filter by title.
-        // We need the property name for the title.
+    /// Queries a database for pages matching a title query.
+    private func queryPagesInDatabaseWithTitle(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
         let titleKey = try await getDatabaseTitlePropertyName(databaseID: databaseID)
+        return try await queryWithTitle(
+            url: URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query")!,
+            apiVersion: nil,
+            titleKey: titleKey,
+            query: query
+        )
+    }
 
-        let dbPayload: [String: Any] = [
+    /// Queries a data source for pages matching a title query.
+    private func queryPagesInDataSourceWithTitle(dataSourceID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
+        let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+        return try await queryWithTitle(
+            url: URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)/query")!,
+            apiVersion: NotionConfig.dataSourceApiVersion,
+            titleKey: titleKey,
+            query: query
+        )
+    }
+
+    /// Generic paginated title-filtered query for any container.
+    private func queryWithTitle(url: URL, apiVersion: String?, titleKey: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
+        var request = try await authorizedRequest(url: url, method: "POST", version: apiVersion)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let payload: [String: Any] = [
             "filter": [
                 "property": titleKey,
                 "title": [
@@ -6111,39 +7142,36 @@ actor NotionService {
             ],
             "page_size": 20
         ]
-        
-        request.httpBody = try JSONSerialization.data(withJSONObject: dbPayload)
-        
-        let (data, response) = try await safeRequest(request, context: "queryDatabase_strict")
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (data, response) = try await safeRequest(request, context: "queryWithTitle")
         let validatedData = try validate(data, response)
-        
-        // Parse results
+
         guard let json = try JSONSerialization.jsonObject(with: validatedData) as? [String: Any],
               let results = json["results"] as? [[String: Any]] else {
             return []
         }
-        
+
         var foundPages: [(id: String, title: String, icon: String?)] = []
         for object in results {
             guard let id = object["id"] as? String,
                   let properties = object["properties"] as? [String: Any] else { continue }
-            
-            // Find title property
+
             var titleString = "Untitled"
             for (_, propValue) in properties {
                 if let propDict = propValue as? [String: Any],
                    let type = propDict["type"] as? String,
                    type == "title",
                    let titleItems = propDict["title"] as? [[String: Any]] {
-                    
+
                     titleString = titleItems.compactMap { item in
                         (item["text"] as? [String: Any])?["content"] as? String
                     }.joined()
                     break
                 }
             }
-            
-            // Parse Icon
+
             var iconString: String? = nil
             if let iconDict = object["icon"] as? [String: Any],
                let type = iconDict["type"] as? String {

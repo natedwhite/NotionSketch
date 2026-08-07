@@ -10,6 +10,8 @@ final class SettingsManager {
 
     static let shared = SettingsManager()
 
+    private let defaults: UserDefaults
+
     // MARK: - Keys
 
     private enum Keys {
@@ -24,141 +26,80 @@ final class SettingsManager {
     // MARK: - Stored Properties
 
     var apiToken: String {
-        didSet { UserDefaults.standard.set(apiToken, forKey: Keys.apiToken) }
+        didSet { defaults.set(apiToken, forKey: Keys.apiToken) }
     }
-    
+
     var shortIoApiKey: String {
-        didSet { UserDefaults.standard.set(shortIoApiKey, forKey: Keys.shortIoApiKey) }
+        didSet { defaults.set(shortIoApiKey, forKey: Keys.shortIoApiKey) }
     }
-    
+
     var shortIoDomain: String {
-        didSet { UserDefaults.standard.set(shortIoDomain, forKey: Keys.shortIoDomain) }
+        didSet { defaults.set(shortIoDomain, forKey: Keys.shortIoDomain) }
     }
 
     /// Raw input from the user — could be a database URL, data source URL, or just an ID.
     var containerInput: String {
         didSet {
-            UserDefaults.standard.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
+            defaults.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
         }
     }
 
     /// The cleaned container ID (always a UUID with dashes). Used by legacy code.
     var databaseID: String {
-        SettingsManager.extractContainerID(from: containerInput)
+        NotionContainerParser.parse(containerInput)?.id ?? ""
     }
-    
+
     /// Raw input for the Connected Pages database.
     var connectedPagesDatabaseInput: String {
         didSet {
-            let extracted = SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
-            UserDefaults.standard.set(extracted, forKey: Keys.connectedPagesDatabaseID)
+            let extracted = Self.extractContainerID(from: connectedPagesDatabaseInput)
+            defaults.set(extracted, forKey: Keys.connectedPagesDatabaseID)
         }
     }
-    
+
     /// The cleaned Connected Pages database ID.
     var connectedPagesDatabaseID: String {
-        SettingsManager.extractContainerID(from: connectedPagesDatabaseInput)
+        Self.extractContainerID(from: connectedPagesDatabaseInput)
     }
 
     // MARK: - Computed
 
-    /// Returns `true` when both the API token and database ID are non-empty.
+    /// Returns `true` when both the API token and container are configured.
     var isConfigured: Bool {
         !apiToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        !databaseID.isEmpty
+        NotionContainerParser.parse(containerInput) != nil
     }
 
     // MARK: - Init
 
-    private init() {
-        self.apiToken = UserDefaults.standard.string(forKey: Keys.apiToken) ?? ""
-        self.shortIoApiKey = UserDefaults.standard.string(forKey: Keys.shortIoApiKey) ?? ""
-        self.shortIoDomain = UserDefaults.standard.string(forKey: Keys.shortIoDomain) ?? "short.gy"
-        // Migrate old database ID key to new container input key
-        if let legacyID = UserDefaults.standard.string(forKey: Keys.databaseID), !legacyID.isEmpty {
-            if UserDefaults.standard.string(forKey: Keys.containerInput) == nil {
-                UserDefaults.standard.set(legacyID, forKey: Keys.containerInput)
-            }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        self.apiToken = defaults.string(forKey: Keys.apiToken) ?? ""
+        self.shortIoApiKey = defaults.string(forKey: Keys.shortIoApiKey) ?? ""
+        self.shortIoDomain = defaults.string(forKey: Keys.shortIoDomain) ?? "short.gy"
+
+        // Read both old and new keys
+        let legacyValue = defaults.string(forKey: Keys.databaseID) ?? ""
+        var newValue = defaults.string(forKey: Keys.containerInput) ?? ""
+
+        // Migrate: if new value is missing, empty, or whitespace-only and legacy has content
+        let newTrimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let legacyTrimmed = legacyValue.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if newTrimmed.isEmpty && !legacyTrimmed.isEmpty {
+            newValue = legacyValue
+            defaults.set(legacyValue, forKey: Keys.containerInput)
         }
-        self.containerInput = UserDefaults.standard.string(forKey: Keys.containerInput) ?? ""
-        self.connectedPagesDatabaseInput = UserDefaults.standard.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
+
+        self.containerInput = newValue
+        self.connectedPagesDatabaseInput = defaults.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
     }
 
-    // MARK: - URL Parsing
+    // MARK: - Compatibility Extraction
 
-    /// Extracts a Notion container ID (database or data source) from a pasted URL or raw ID string.
-    ///
-    /// Supports formats like:
-    /// - `https://www.notion.so/workspace/abc123def456...?v=...`
-    /// - `https://notion.so/abc123def456...`
-    /// - `https://www.notion.so/workspace/data-source/Title-abc123def456...`
-    /// - `abc123def456...` (raw 32-char hex)
-    /// - `abc123de-f456-7890-abcd-ef1234567890` (UUID with dashes)
+    /// Extracts a Notion container ID from input using the shared parser.
     static func extractContainerID(from input: String) -> String {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "" }
-
-        // Try to parse as URL first
-        if let url = URL(string: trimmed), let host = url.host,
-           host.contains("notion") {
-            // The path looks like /workspace/Title-<id> or just /<id>
-            let path = url.path
-            // Remove leading slash and split by /
-            let segments = path.split(separator: "/")
-
-            // The last path segment contains the ID (possibly with a title prefix)
-            if let lastSegment = segments.last {
-                let segmentStr = String(lastSegment)
-                // The ID is the last 32 hex characters of the segment
-                if let id = extractHexID(from: segmentStr) {
-                    return formatAsUUID(id)
-                }
-            }
-        }
-
-        // Try to extract a 32-char hex ID directly from the input
-        if let id = extractHexID(from: trimmed) {
-            return formatAsUUID(id)
-        }
-
-        // Already a UUID with dashes? Return as-is if valid
-        let noDashes = trimmed.replacingOccurrences(of: "-", with: "")
-        if noDashes.count == 32 && noDashes.allSatisfy(\.isHexDigit) {
-            return formatAsUUID(noDashes)
-        }
-
-        // Can't parse — return the raw input so the error is visible to the user
-        return trimmed
-    }
-
-    /// Finds 32 consecutive hex characters at the end of a string.
-    private static func extractHexID(from string: String) -> String? {
-        // Remove any query parameters
-        let noQuery = string.components(separatedBy: "?").first ?? string
-
-        // Remove dashes to normalize
-        let noDashes = noQuery.replacingOccurrences(of: "-", with: "")
-
-        // Look for a 32-char hex sequence at the end
-        guard noDashes.count >= 32 else { return nil }
-
-        let suffix = String(noDashes.suffix(32))
-        guard suffix.allSatisfy(\.isHexDigit) else { return nil }
-
-        return suffix
-    }
-
-    /// Formats a 32-char hex string as a UUID with dashes (8-4-4-4-12).
-    private static func formatAsUUID(_ hex: String) -> String {
-        guard hex.count == 32 else { return hex }
-        let chars = Array(hex)
-        let parts = [
-            String(chars[0..<8]),
-            String(chars[8..<12]),
-            String(chars[12..<16]),
-            String(chars[16..<20]),
-            String(chars[20..<32])
-        ]
-        return parts.joined(separator: "-")
+        NotionContainerParser.parse(input)?.id ?? ""
     }
 }
