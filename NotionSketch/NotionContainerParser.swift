@@ -59,9 +59,13 @@ enum NotionContainerParser {
             // Require http or https
             guard scheme.lowercased() == "http" || scheme.lowercased() == "https" else { return nil }
 
-            // Require notion.so or *.notion.so host (case-insensitive)
+            // Require notion.so, *.notion.so, notion.site, *.notion.site, notion.com, *.notion.com, app.notion.com, or *.app.notion.com (case-insensitive)
             let lowerHost = host.lowercased()
-            guard lowerHost == "notion.so" || lowerHost.hasSuffix(".notion.so") else { return nil }
+            let isNotionSo = lowerHost == "notion.so" || lowerHost.hasSuffix(".notion.so")
+            let isNotionSite = lowerHost == "notion.site" || lowerHost.hasSuffix(".notion.site")
+            let isNotionCom = lowerHost == "notion.com" || lowerHost.hasSuffix(".notion.com")
+            let isAppNotion = lowerHost == "app.notion.com" || lowerHost.hasSuffix(".app.notion.com")
+            guard isNotionSo || isNotionSite || isNotionCom || isAppNotion else { return nil }
 
             // 1. Check query items FIRST (ds= or data_source=)
             if let queryItems = components.queryItems {

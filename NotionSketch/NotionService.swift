@@ -798,6 +798,35 @@ actor NotionService {
         return "Name"
     }
 
+    /// Returns the cached data source ID, or resolves it from the database and caches the result.
+    func getDatabaseID() async throws -> String {
+        let hasCachedID = await MainActor.run { !SettingsManager.shared.dataSourceID.isEmpty }
+        if hasCachedID {
+            await MainActor.run {
+                SyncLogger.log("✅ Using cached data source ID: \(SettingsManager.shared.dataSourceID)")
+            }
+            return await MainActor.run { SettingsManager.shared.dataSourceID }
+        }
+
+        let databaseID = await MainActor.run { SettingsManager.shared.databaseID }
+        guard !databaseID.isEmpty else {
+            await MainActor.run {
+                SyncLogger.log("⚠️ Cannot resolve data source ID: database ID is empty")
+            }
+            throw NotionServiceError.notConfigured
+        }
+
+        await MainActor.run {
+            SyncLogger.log("ℹ️ Resolving data source ID for database \(databaseID)...")
+        }
+        let dataSourceID = try await fetchDataSourceID(databaseID: databaseID)
+        await MainActor.run {
+            SettingsManager.shared.dataSourceID = dataSourceID
+            SyncLogger.log("✅ Cached resolved data source ID: \(dataSourceID)")
+        }
+        return dataSourceID
+    }
+
     // MARK: - Data Source Discovery
 
     /// Fetches the first data source ID for a database.

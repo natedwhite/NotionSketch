@@ -21,6 +21,7 @@ final class SettingsManager {
         static let connectedPagesDatabaseID = "notion_connected_pages_database_id"
         static let shortIoApiKey = "short_io_api_key"
         static let shortIoDomain = "short_io_domain"
+        static let dataSourceID = "notion_data_source_id"
     }
 
     // MARK: - Stored Properties
@@ -35,6 +36,11 @@ final class SettingsManager {
 
     var shortIoDomain: String {
         didSet { defaults.set(shortIoDomain, forKey: Keys.shortIoDomain) }
+    }
+
+    /// Cached data source ID resolved from the database via Notion API.
+    var dataSourceID: String {
+        didSet { defaults.set(dataSourceID, forKey: Keys.dataSourceID) }
     }
 
     /// Raw input from the user — could be a database URL, data source URL, or just an ID.
@@ -78,6 +84,7 @@ final class SettingsManager {
         self.apiToken = defaults.string(forKey: Keys.apiToken) ?? ""
         self.shortIoApiKey = defaults.string(forKey: Keys.shortIoApiKey) ?? ""
         self.shortIoDomain = defaults.string(forKey: Keys.shortIoDomain) ?? "short.gy"
+        self.dataSourceID = defaults.string(forKey: Keys.dataSourceID) ?? ""
 
         // Read both old and new keys
         let legacyValue = defaults.string(forKey: Keys.databaseID) ?? ""
