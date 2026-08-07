@@ -599,7 +599,8 @@ actor NotionService {
 
     /// Creates a page in a Notion database using legacy API.
     private func createPageInDatabaseInternal(databaseID: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
-        let titlePropertyName = try await getDatabaseTitlePropertyName(databaseID: databaseID)
+        let resolvedDataSourceID = try await getDataSourceID()
+        let titlePropertyName = try await getDataSourceTitlePropertyName(dataSourceID: resolvedDataSourceID)
         return try await createPageInContainer(
             parentPayload: ["type": "database_id", "database_id": databaseID],
             apiVersion: nil,
@@ -651,7 +652,8 @@ actor NotionService {
             }
             
             SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)), retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
-            let dbTitleProp = try await getDatabaseTitlePropertyName(databaseID: fallbackDB)
+            let fallbackDSID = try await fetchDataSourceID(databaseID: fallbackDB)
+            let dbTitleProp = try await getDataSourceTitlePropertyName(dataSourceID: fallbackDSID)
             return try await createPageInContainer(
                 parentPayload: ["type": "database_id", "database_id": fallbackDB],
                 apiVersion: nil,
@@ -718,10 +720,6 @@ actor NotionService {
 
     // MARK: - Query Database Schema
 
-    /// Retrieves the database and finds the name of the title property.
-    /// Notion databases always have exactly one title property, but its name varies.
-    private var databaseTitlePropertyNameCache: [String: String] = [:]
-
     /// Cached title property names for data sources.
     private var dataSourceTitlePropertyNameCache: [String: String] = [:]
 
@@ -765,44 +763,8 @@ actor NotionService {
         }
     }
 
-    /// Retrieves the database and finds the name of the title property.
-    /// Notion databases always have exactly one title property, but its name varies.
-    private func getDatabaseTitlePropertyName(databaseID: String) async throws -> String {
-        if let cached = databaseTitlePropertyNameCache[databaseID] {
-            return cached
-        }
-
-        guard let url = URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)") else {
-            throw NotionServiceError.invalidURL
-        }
-
-        let request = try await authorizedRequest(url: url, method: "GET")
-        let (data, response) = try await safeRequest(request, context: "getDatabaseTitle")
-        let validatedData = try validate(data, response)
-
-        let decoded: DatabaseResponse
-        do {
-            decoded = try JSONDecoder().decode(DatabaseResponse.self, from: validatedData)
-        } catch {
-
-            let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
-            throw NotionServiceError.decodingFailed("dbSchema: \(error.localizedDescription) — raw: \(raw.prefix(1000))")
-        }
-
-        // Find the property whose type is "title"
-        for (name, property) in decoded.properties ?? [:] {
-            if property.type == "title" {
-                databaseTitlePropertyNameCache[databaseID] = name
-                return name
-            }
-        }
-
-        // Fallback — shouldn't happen since every database has a title property
-        return "Name"
-    }
-
     /// Returns the cached data source ID, or resolves it from the database and caches the result.
-    func getDatabaseID() async throws -> String {
+    func getDataSourceID() async throws -> String {
         let hasCachedID = await MainActor.run { !SettingsManager.shared.dataSourceID.isEmpty }
         if hasCachedID {
             await MainActor.run {
@@ -1279,7 +1241,8 @@ actor NotionService {
             let titleProp: String
             switch resolved.ref {
             case .database(let dbID):
-                titleProp = try await getDatabaseTitlePropertyName(databaseID: dbID)
+                let dsID = try await fetchDataSourceID(databaseID: dbID)
+                titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
             case .dataSource(let dsID):
                 titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
             }
@@ -1841,7 +1804,8 @@ actor NotionService {
 
     /// Queries a database for pages matching a title query.
     private func queryPagesInDatabaseWithTitle(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
-        let titleKey = try await getDatabaseTitlePropertyName(databaseID: databaseID)
+        let dsID = try await fetchDataSourceID(databaseID: databaseID)
+        let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
         return try await queryWithTitle(
             url: URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query")!,
             apiVersion: nil,
