@@ -166,7 +166,8 @@ final class NotionSyncManager {
                 try await notionService.updatePageProperties(
                     pageID: existingPageID,
                     title: document.title,
-                    appLink: "notionsketch://open?id=\(document.id.uuidString)"
+                    ocrText: recognizedText,
+                    appLink: appLink
                 )
                 pageID = existingPageID
                 // We no longer clear all page blocks, as we want to preserve user content and the stable container.
@@ -177,7 +178,8 @@ final class NotionSyncManager {
                 step = "createPage"
                 pageID = try await notionService.createPageInDatabase(
                     title: document.title,
-                    appLink: "notionsketch://open?id=\(document.id.uuidString)"
+                    ocrText: recognizedText,
+                    appLink: appLink
                 )
                 document.notionPageID = pageID
             }
