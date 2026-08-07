@@ -1763,7 +1763,7 @@ actor NotionService {
         // Or the 'properties' field is not returned for some reason?
         
         let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(databaseID)")!
-        let request = try await authorizedRequest(url: url)
+        let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
         
         let (data, _) = try await safeRequest(request, context: "fetchConnectedPagesTarget")
         

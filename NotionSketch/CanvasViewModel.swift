@@ -287,7 +287,7 @@ final class CanvasViewModel {
         }
 
         do {
-            let results = try await notionService.queryDatabase(databaseID: dsID, query: query)
+            let results = try await notionService.queryContainer(ref: .dataSource(id: dsID), query: query)
             return mapResults(results)
         } catch {
             SyncLogger.log("⚠️ Targeted search failed: \(dsID) - \(error.localizedDescription)")
