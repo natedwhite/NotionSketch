@@ -13,9 +13,11 @@ xcuserdata
 *.xccheckout
 *.moved-aside
 DerivedData
+Derived/
 *.hmap
 *.ipa
 *.xcuserstate
+NotionSketch.app/
 
 # Tuist
 #
@@ -37,6 +39,7 @@ Token.swift
 *.DS_Store
 .AppleDouble
 .LSOverride
+repomix-output.xml
 
 # Icon must end with two \r
 Icon

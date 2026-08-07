@@ -476,6 +476,11 @@ actor NotionService {
         return data
     }
 
+    private func isNetworkError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain
+    }
+
     // MARK: - File Upload: Step 1 — Create
 
     private func createFileUpload(filename: String, contentType: String) async throws -> String {
@@ -579,7 +584,7 @@ actor NotionService {
     ///
     /// - Parameter title: The page title (maps to the database's title property).
     /// - Returns: The newly created Notion page ID.
-    func createPageInDatabase(title: String, ocrText: String? = nil, appLink: String? = nil, drawingEncoding: String? = nil) async throws -> String {
+    func createPageInDatabase(title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         let resolved = try await resolveSketchesContainer()
 
         switch resolved.ref {
@@ -589,17 +594,16 @@ actor NotionService {
                 fallbackDatabaseID: resolved.fallbackDatabaseID,
                 title: title,
                 ocrText: ocrText,
-                appLink: appLink,
-                drawingEncoding: drawingEncoding
+                appLink: appLink
             )
 
         case .database(let id):
-            return try await createPageInDatabaseInternal(databaseID: id, title: title, ocrText: ocrText, appLink: appLink, drawingEncoding: drawingEncoding)
+            return try await createPageInDatabaseInternal(databaseID: id, title: title, ocrText: ocrText, appLink: appLink)
         }
     }
 
     /// Creates a page in a Notion database using legacy API.
-    private func createPageInDatabaseInternal(databaseID: String, title: String, ocrText: String? = nil, appLink: String? = nil, drawingEncoding: String? = nil) async throws -> String {
+    private func createPageInDatabaseInternal(databaseID: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         let titlePropertyName = try await getDatabaseTitlePropertyName(databaseID: databaseID)
         return try await createPageInContainer(
             parentPayload: ["database_id": databaseID],
@@ -607,8 +611,7 @@ actor NotionService {
             titlePropertyName: titlePropertyName,
             title: title,
             ocrText: ocrText,
-            appLink: appLink,
-            drawingEncoding: drawingEncoding
+            appLink: appLink
         )
     }
 
@@ -618,8 +621,7 @@ actor NotionService {
         fallbackDatabaseID: String?,
         title: String,
         ocrText: String?,
-        appLink: String?,
-        drawingEncoding: String?
+        appLink: String?
     ) async throws -> String {
         let titlePropertyName = try await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
 
@@ -630,15 +632,14 @@ actor NotionService {
                 titlePropertyName: titlePropertyName,
                 title: title,
                 ocrText: ocrText,
-                appLink: appLink,
-                drawingEncoding: drawingEncoding
+                appLink: appLink
             )
         } catch {
-            guard let fallbackDB = fallbackDatabaseID else {
+            guard let fallbackDB = fallbackDatabaseID, isNetworkError(error) else {
                 SyncLogger.log("❌ Data source page creation failed for \(dataSourceID), no safe database fallback available")
                 throw error
             }
-            SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)), retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
+            SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)) due to network error, retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
             let dbTitleProp = try await getDatabaseTitlePropertyName(databaseID: fallbackDB)
             return try await createPageInContainer(
                 parentPayload: ["database_id": fallbackDB],
@@ -646,14 +647,13 @@ actor NotionService {
                 titlePropertyName: dbTitleProp,
                 title: title,
                 ocrText: ocrText,
-                appLink: appLink,
-                drawingEncoding: drawingEncoding
+                appLink: appLink
             )
         }
     }
 
     /// Generic page creation for any container type.
-    private func createPageInContainer(parentPayload: [String: Any], apiVersion: String?, titlePropertyName: String, title: String, ocrText: String? = nil, appLink: String? = nil, drawingEncoding: String? = nil) async throws -> String {
+    private func createPageInContainer(parentPayload: [String: Any], apiVersion: String?, titlePropertyName: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages") else {
             throw NotionServiceError.invalidURL
         }
@@ -671,14 +671,6 @@ actor NotionService {
 
         if let ocrText {
              properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
-        }
-
-        if let drawingEncoding {
-            let chunks = chunkString(drawingEncoding, size: 2000)
-            let richTextObjects = chunks.map { chunk in
-                ["text": ["content": chunk]]
-            }
-            properties["Drawing Encode"] = [ "rich_text": richTextObjects ]
         }
 
         var finalAppLink = appLink
@@ -1258,13 +1250,12 @@ actor NotionService {
 
     // MARK: - Update Page Properties
 
-    /// Updates properties of an existing page: Title, OCR text, Deep Link, and Drawing Encoding.
+    /// Updates properties of an existing page: Title, OCR text, and Deep Link.
     func updatePageProperties(
         pageID: String,
         title: String? = nil,
         ocrText: String? = nil,
-        appLink: String? = nil,
-        drawingEncoding: String? = nil
+        appLink: String? = nil
     ) async throws {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
             throw NotionServiceError.invalidURL
@@ -1286,15 +1277,6 @@ actor NotionService {
 
         if let ocrText {
             properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
-        }
-
-        if let drawingEncoding {
-            // Chunk the drawing data into 2000-char text objects
-            let chunks = chunkString(drawingEncoding, size: 2000)
-            let richTextObjects = chunks.map { chunk in
-                ["text": ["content": chunk]]
-            }
-            properties["Drawing Encode"] = [ "rich_text": richTextObjects ]
         }
 
         var finalAppLink = appLink
@@ -1467,10 +1449,10 @@ actor NotionService {
         }
     }
 
-    // MARK: - Fetch Page Details (Title + Icon + Relations + Drawing)
+    // MARK: - Fetch Page Details (Title + Icon + Relations)
     
-    /// Fetches the current title, icon, connected page IDs, and drawing encoding from Notion.
-    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?, connectedIDs: [String], drawingNum: String?)? {
+    /// Fetches the current title, icon, and connected page IDs from Notion.
+    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?, connectedIDs: [String])? {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
             throw NotionServiceError.invalidURL
         }
@@ -1490,23 +1472,16 @@ actor NotionService {
         // Find title property and connected pages relation
         var title = "Untitled"
         var connectedIDs: [String] = []
-        var drawingEncoded: String? = nil
         
         for (key, property) in decoded.properties {
             if property.type == "title", let titleObjects = property.title {
                 title = titleObjects.map { $0.text.content }.joined()
             } else if property.type == "relation", key == "Connected Pages", let relations = property.relation {
                 connectedIDs = relations.map { $0.id }
-            } else if property.type == "rich_text", key == "Drawing Encode", let richTexts = property.rich_text {
-                // Determine if there is content
-                let fullText = richTexts.map { $0.text.content }.joined()
-                if !fullText.isEmpty {
-                    drawingEncoded = fullText
-                }
             }
         }
         
-        return (title, decoded.icon?.value, connectedIDs, drawingEncoded)
+        return (title, decoded.icon?.value, connectedIDs)
     }
     
     // MARK: - Archive (Trash) a Page

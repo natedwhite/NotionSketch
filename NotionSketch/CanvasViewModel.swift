@@ -178,7 +178,7 @@ final class CanvasViewModel {
         }
         
         do {
-            if let (title, _, connectedIDs, _) = try await notionService.fetchPageDetails(pageID: pageID) {
+            if let (title, _, connectedIDs) = try await notionService.fetchPageDetails(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")

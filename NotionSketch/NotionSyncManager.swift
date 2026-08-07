@@ -166,9 +166,7 @@ final class NotionSyncManager {
                 try await notionService.updatePageProperties(
                     pageID: existingPageID,
                     title: document.title,
-                    ocrText: recognizedText,
-                    appLink: appLink,
-                    drawingEncoding: nil // CLEAR property if it exists? Or just ignore.
+                    appLink: "notionsketch://open?id=\(document.id.uuidString)"
                 )
                 pageID = existingPageID
                 // We no longer clear all page blocks, as we want to preserve user content and the stable container.
@@ -179,9 +177,7 @@ final class NotionSyncManager {
                 step = "createPage"
                 pageID = try await notionService.createPageInDatabase(
                     title: document.title,
-                    ocrText: recognizedText,
-                    appLink: appLink,
-                    drawingEncoding: nil
+                    appLink: "notionsketch://open?id=\(document.id.uuidString)"
                 )
                 document.notionPageID = pageID
             }
@@ -292,7 +288,7 @@ final class NotionSyncManager {
             cachedTargetDatabaseID = try? await notionService.fetchConnectedPagesTargetDatabaseID()
         }
         
-        guard let (title, _, connectedIDs, _) = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
+        guard let (title, _, connectedIDs) = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
         
         // 1. Update Title
         if !title.isEmpty && title != document.title {
@@ -313,7 +309,7 @@ final class NotionSyncManager {
          
          do {
              // Fetch Metadata
-             if let (title, _, connectedIDs, _) = try await notionService.fetchPageDetails(pageID: pageID) {
+              if let (title, _, connectedIDs) = try await notionService.fetchPageDetails(pageID: pageID) {
                  if !title.isEmpty && title != document.title {
                      document.title = title
                  }
@@ -409,7 +405,7 @@ final class NotionSyncManager {
                             
                             do {
                                 // A. Fetch Details
-                                guard let (title, _, connectedIDs, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
+                                 guard let (title, _, connectedIDs) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
                                     SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
                                     return nil
                                 }
@@ -443,7 +439,7 @@ final class NotionSyncManager {
                         // 4. Update existing? (Optional: Sync Title if changed)
                         if let existing = localMap[normalizedRemote] {
                             Task {
-                                guard let (title, _, _, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
+                                guard let (title, _, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
                                 if !title.isEmpty && title != existing.title {
                                     existing.title = title
                                 }
