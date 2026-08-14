@@ -344,7 +344,6 @@ struct DrawingCanvas: UIViewRepresentable {
 struct CanvasView: View {
 
     @Bindable var viewModel: CanvasViewModel
-    @State private var showConnectedPages = false
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -371,17 +370,6 @@ struct CanvasView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                // Link Pages Button
-                Button {
-                    showConnectedPages = true
-                } label: {
-                    Image(systemName: "link")
-                }
-                .popover(isPresented: $showConnectedPages) {
-                    ConnectedPagesSheet(viewModel: viewModel)
-                        .frame(minWidth: 320, minHeight: 400)
-                }
-
                 // Open in Notion button
                 if let pageID = viewModel.document.notionPageID {
                     Button {
@@ -415,152 +403,7 @@ struct CanvasView: View {
             }
         }
         .task {
-            // Ensure titles are loaded for existing links
             await viewModel.fetchRemoteProperties()
-            await viewModel.refreshConnectedPageDetails()
-        }
-    }
-}
-
-// MARK: - Connected Pages Sheet
-
-struct ConnectedPagesSheet: View {
-    @Bindable var viewModel: CanvasViewModel
-    @State private var searchQuery = ""
-    @State private var searchResults: [CanvasViewModel.ConnectedPageItem] = []
-    @State private var isSearching = false
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List {
-                // Section 1: Connected Pages
-                Section("Connected Pages") {
-                    if viewModel.connectedPages.isEmpty {
-                        Text("No pages connected")
-                            .foregroundStyle(.secondary)
-                            .italic()
-                    } else {
-                        ForEach(viewModel.connectedPages) { page in
-                            HStack {
-                                NotionIconView(icon: page.icon)
-                                Text(page.title)
-                                Spacer()
-                                Button {
-                                    viewModel.removeConnectedPage(id: page.id)
-                                } label: {
-                                    Image(systemName: "minus.circle.fill")
-                                        .foregroundStyle(.red)
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                        }
-                    }
-                }
-
-                // Section 2: Search
-                Section("Link New Page") {
-                    TextField("Search Notion...", text: $searchQuery)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                    
-                    if isSearching {
-                        HStack {
-                            Spacer()
-                            ProgressView()
-                            Spacer()
-                        }
-                    } else if !searchQuery.isEmpty && searchResults.isEmpty {
-                        Text("No results found")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(searchResults) { page in
-                            HStack {
-                                NotionIconView(icon: page.icon)
-                                Text(page.title)
-                                Spacer()
-                                if viewModel.document.connectedPageIDs.contains(page.id) {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(.green)
-                                } else {
-                                    Button {
-                                        viewModel.addConnectedPage(page)
-                                    } label: {
-                                        Image(systemName: "plus.circle")
-                                            .foregroundStyle(.blue)
-                                    }
-                                    .buttonStyle(.borderless)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("Connect Pages")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .task(id: searchQuery) {
-                guard !searchQuery.isEmpty else {
-                    searchResults = []
-                    isSearching = false // Ensure loading state is turned off for empty query
-                    return
-                }
-
-                // Immediately indicate that a search process has started.
-                isSearching = true
-
-                // DEBOUNCE: Wait for 300ms of inactivity.
-                do {
-                    try await Task.sleep(for: .milliseconds(300))
-                } catch {
-                    // Task was cancelled (user typed again), so exit.
-                    // The new task will have already set isSearching = true.
-                    return
-                }
-
-                // Check for cancellation after the sleep.
-                guard !Task.isCancelled else { return }
-
-                // Now perform the actual search.
-                let results = await viewModel.searchPages(query: searchQuery)
-                
-                // Final check for cancellation after the network call.
-                guard !Task.isCancelled else { return }
-
-                // Update UI with results.
-                searchResults = results
-                isSearching = false
-            }
-        }
-    }
-}
-
-// MARK: - Notion Icon View
-
-struct NotionIconView: View {
-    let icon: String?
-    
-    var body: some View {
-        if let icon = icon {
-            if icon.hasPrefix("http") {
-                AsyncImage(url: URL(string: icon)) { phase in
-                    if let image = phase.image {
-                        image.resizable().scaledToFill()
-                    } else {
-                        Color.gray.opacity(0.3)
-                    }
-                }
-                .frame(width: 20, height: 20)
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-            } else {
-                Text(icon) // Emoji
-            }
-        } else {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
         }
     }
 }

@@ -67,7 +67,6 @@ final class CanvasViewModel {
 
     // MARK: - Private Properties
 
-    private var targetDataSourceID: String? = nil
     private let notionService = NotionService()
 
     // MARK: - Whiteboard Bridge
@@ -164,34 +163,17 @@ final class CanvasViewModel {
     
     // MARK: - Remote Sync (Title & Properties)
     
-    /// Fetches remote properties (Title, Linked Pages) from Notion.
+    /// Fetches remote title from Notion.
     func fetchRemoteProperties() async {
         guard let pageID = document.notionPageID else { return }
         guard SettingsManager.shared.isConfigured else { return }
         
-        // 0. Ensure target data source for filtered search is known
-        if targetDataSourceID == nil {
-            targetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
-            if let dsID = targetDataSourceID {
-                SyncLogger.log("🎯 Resolved target data source for Connected Pages: \(dsID)")
-            }
-        }
-        
         do {
-            if let (title, _, connectedIDs) = try await notionService.fetchPageDetails(pageID: pageID) {
+            if let title = try await notionService.fetchPageTitle(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")
                     document.title = title
-                }
-                
-                // 2. Sync Connected Page IDs (Overwrite/Source of Truth)
-                // We update local to match remote exactly. This handles additions AND deletions in Notion.
-                // Note: Offline additions might be lost if not synced before this runs.
-                if Set(document.connectedPageIDs) != Set(connectedIDs) {
-                    SyncLogger.log("🔄 Syncing connected pages from Notion (Remote: \(connectedIDs.count), Local: \(document.connectedPageIDs.count))")
-                    document.connectedPageIDs = connectedIDs
-                    await refreshConnectedPageDetails() // Fetch details for new IDs and prune old
                 }
             }
         } catch {
@@ -242,123 +224,5 @@ final class CanvasViewModel {
 
     // MARK: - Connected Pages Logic
     
-    struct ConnectedPageItem: Identifiable, Hashable {
-        let id: String
-        let title: String
-        let icon: String?
-    }
-    
-    var connectedPages: [ConnectedPageItem] {
-        document.connectedPageIDs.map { id in
-            let info = document.connectedPageCache[id]
-            return ConnectedPageItem(id: id, title: info?.title ?? "Loading...", icon: info?.icon)
-        }
-    }
-    
-    /// Searches for pages in Notion to link (optionally filtering by target database).
-    func searchPages(query: String) async -> [ConnectedPageItem] {
-        guard !query.isEmpty else { return [] }
-        
-        // Helper to convert results to view models
-        func mapResults(_ results: [(id: String, title: String, icon: String?)]) -> [ConnectedPageItem] {
-            results
-                .filter { $0.id.replacingOccurrences(of: "-", with: "") != document.notionPageID?.replacingOccurrences(of: "-", with: "") } // Exclude self
-                .map { ConnectedPageItem(id: $0.id, title: $0.title, icon: $0.icon) }
-        }
-
-        // 1. Check for Manual override in Settings
-        let manualID = SettingsManager.shared.connectedPagesDatabaseID
-        if !manualID.isEmpty {
-            targetDataSourceID = manualID
-        }
-
-        // 2. Lazy load target data source if not yet cached/configured
-        if targetDataSourceID == nil {
-             targetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
-        }
-
-        // 3. Strict Query
-        // We require a target data source ID (manual or auto-detected).
-        guard let dsID = targetDataSourceID else {
-            // If we can't find a data source, we return empty (Strict mode).
-            // User can now configure it manually if auto-detection fails.
-            SyncLogger.log("⚠️ Cannot search: Target data source not resolved. Please configure 'Connected Pages Database' in Settings.")
-            return []
-        }
-
-        do {
-            let results = try await notionService.queryContainer(ref: .dataSource(id: dsID), query: query)
-            return mapResults(results)
-        } catch {
-            SyncLogger.log("⚠️ Targeted search failed: \(dsID) - \(error.localizedDescription)")
-            return []
-        }
-    }
-    
-    /// Links a Notion page to this sketch.
-    func addConnectedPage(_ item: ConnectedPageItem) {
-        guard !document.connectedPageIDs.contains(item.id) else { return }
-        
-        document.connectedPageIDs.append(item.id)
-        // Optimistic update
-        document.connectedPageCache[item.id] = ConnectedPageInfo(title: item.title, icon: item.icon)
-        
-        Task {
-            await syncConnectedPages()
-        }
-    }
-    
-    /// Unlinks a Notion page from this sketch.
-    func removeConnectedPage(id: String) {
-        document.connectedPageIDs.removeAll { $0 == id }
-        
-        Task {
-            await syncConnectedPages()
-        }
-    }
-    
-    /// Resolves details for all bridged page IDs and cleans up stale cache.
-    func refreshConnectedPageDetails() async {
-        let ids = document.connectedPageIDs
-        
-        // 1. Prune stale cache entries
-        await MainActor.run {
-            let cachedKeys = Set(document.connectedPageCache.keys)
-            let activeKeys = Set(ids)
-            let staleKeys = cachedKeys.subtracting(activeKeys)
-            
-            for key in staleKeys {
-                 document.connectedPageCache.removeValue(forKey: key)
-            }
-        }
-
-        guard !ids.isEmpty else { return }
-        
-        // 2. Fetch details from Notion
-        let resolved = await notionService.resolvePageDetails(pageIDs: ids)
-        
-        await MainActor.run {
-            for (id, (title, icon)) in resolved {
-                document.connectedPageCache[id] = ConnectedPageInfo(title: title, icon: icon)
-            }
-        }
-    }
-    
-    /// Syncs the current list of connected page IDs to the Sketch's Notion page.
-    private func syncConnectedPages() async {
-        guard let pageID = document.notionPageID else {
-            // If the sketch isn't in Notion yet, we can't sync relations.
-            // They will be synced when the sketch is first created/synced relative to the main pipeline? 
-            // NOTE: Currently main pipeline doesn't include relations. 
-            // TODO: Ensure createPage/updatePage includes them or we trigger this after main sync.
-            return 
-        }
-        
-        do {
-            try await notionService.updateConnectedPages(pageID: pageID, targetPageIDs: document.connectedPageIDs)
-        } catch {
-            SyncLogger.log("⚠️ Failed to sync connected pages: \(error.localizedDescription)")
-        }
-    }
     // scheduleSuccessDismiss removed (managed by NotionSyncManager)
 }

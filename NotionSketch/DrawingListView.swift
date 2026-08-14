@@ -41,9 +41,6 @@ struct DrawingListView: View {
             formatter.timeStyle = .short
             if formatter.string(from: sketch.createdAt).localizedCaseInsensitiveContains(searchText) { return true }
             
-            // Connected Pages match
-            if sketch.connectedPageIDs.compactMap({ sketch.connectedPageCache[$0] }).contains(where: { $0.title.localizedCaseInsensitiveContains(searchText) }) { return true }
-            
             return false
         }
     }
@@ -60,7 +57,7 @@ struct DrawingListView: View {
         .onChange(of: sketches, perform: { _ in updateFilteredSketches() })
         .onChange(of: searchText, perform: { _ in updateFilteredSketches() })
         .navigationTitle("NotionSketch")
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Search sketches, dates, or links")
+        .searchable(text: $searchText, placement: .sidebar, prompt: "Search sketches or dates")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button {
@@ -267,58 +264,6 @@ private struct SketchCard: View {
             }
             .padding(.horizontal, 4)
             .padding(.top, 8)
-
-                // Connected Pages (First 2)
-                if !sketch.connectedPageIDs.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 4) {
-                            let pages = sketch.connectedPageIDs
-                                .compactMap { sketch.connectedPageCache[$0] }
-                                .sorted { $0.title < $1.title }
-                            
-                            ForEach(Array(pages.prefix(3)), id: \.title) { info in
-                            HStack(spacing: 2) {
-                                if let icon = info.icon, !icon.isEmpty {
-                                    if icon.hasPrefix("http") {
-                                        AsyncImage(url: URL(string: icon)) { phase in
-                                            if let image = phase.image {
-                                                image.resizable().scaledToFill()
-                                            } else {
-                                                Color.gray.opacity(0.3)
-                                            }
-                                        }
-                                        .frame(width: 12, height: 12)
-                                        .clipShape(RoundedRectangle(cornerRadius: 2))
-                                    } else {
-                                        Text(icon).font(.caption2)
-                                    }
-                                } else {
-                                    Image(systemName: "doc.text.fill")
-                                        .font(.caption2)
-                                        .foregroundStyle(.blue)
-                                }
-                                
-                                Text(info.title)
-                                    .font(.caption2)
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.1))
-                            .clipShape(Capsule())
-                        }
-                        
-                        if sketch.connectedPageCache.count > 3 {
-                            Text("+\(sketch.connectedPageCache.count - 3)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(.top, 4)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
-            }
         }
     }
 }

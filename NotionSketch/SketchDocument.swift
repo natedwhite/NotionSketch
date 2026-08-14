@@ -17,8 +17,6 @@ final class SketchDocument {
     var createdAt: Date
     var lastSyncedAt: Date?
     var thumbnailData: Data?
-    var connectedPageIDs: [String] = []
-    var connectedPageCache: [String: ConnectedPageInfo] = [:]
 
     // MARK: - Whiteboard Migration Properties
     // Additive stored properties for migration-safe SwiftData lightweight migration.
@@ -46,8 +44,6 @@ final class SketchDocument {
         self.createdAt = Date()
         self.lastSyncedAt = nil
         self.thumbnailData = nil
-        self.connectedPageIDs = []
-        self.connectedPageCache = [:]
     }
 
     // MARK: - Drawing Convenience
@@ -145,8 +141,3 @@ final class SketchDocument {
     }
 }
 
-/// Helper struct for caching connected page details.
-struct ConnectedPageInfo: Codable {
-    let title: String
-    let icon: String?
-}

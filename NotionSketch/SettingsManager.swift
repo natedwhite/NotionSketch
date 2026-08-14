@@ -18,7 +18,6 @@ final class SettingsManager {
         static let apiToken = "notion_api_token"
         static let databaseID = "notion_database_id" // Legacy key, migrated to containerInput
         static let containerInput = "notion_container_input"
-        static let connectedPagesDatabaseID = "notion_connected_pages_database_id"
         static let shortIoApiKey = "short_io_api_key"
         static let shortIoDomain = "short_io_domain"
         static let dataSourceID = "notion_data_source_id"
@@ -55,19 +54,6 @@ final class SettingsManager {
         NotionContainerParser.parse(containerInput)?.id ?? ""
     }
 
-    /// Raw input for the Connected Pages database.
-    var connectedPagesDatabaseInput: String {
-        didSet {
-            let extracted = Self.extractContainerID(from: connectedPagesDatabaseInput)
-            defaults.set(extracted, forKey: Keys.connectedPagesDatabaseID)
-        }
-    }
-
-    /// The cleaned Connected Pages database ID.
-    var connectedPagesDatabaseID: String {
-        Self.extractContainerID(from: connectedPagesDatabaseInput)
-    }
-
     // MARK: - Computed
 
     /// Returns `true` when both the API token and container are configured.
@@ -100,7 +86,6 @@ final class SettingsManager {
         }
 
         self.containerInput = newValue
-        self.connectedPagesDatabaseInput = defaults.string(forKey: Keys.connectedPagesDatabaseID) ?? ""
     }
 
     // MARK: - Compatibility Extraction

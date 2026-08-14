@@ -27,9 +27,6 @@ final class NotionSyncManager {
     private var documentStates: [String: DocumentSyncState] = [:]
     private let notionService = NotionService()
     
-    // Cache for relation target data source
-    private var cachedTargetDataSourceID: String? = nil
-    
     /// Requests a sync for the given document with a debounce delay.
     func requestSync(document: SketchDocument, delay: Duration = .seconds(10)) {
         let id = document.id.uuidString
@@ -211,10 +208,6 @@ final class NotionSyncManager {
                 try await notionService.updatePageContent(pageID: pageID, drawingString: encoding)
             }
             
-            // 7. Sync Connected Pages
-            step = "syncRelations"
-            await fetchRemoteProperties(for: document)
-            
             document.lastSyncedAt = Date()
             syncStates[id] = .success
             scheduleSuccessDismiss(for: id)
@@ -281,44 +274,18 @@ final class NotionSyncManager {
         }.value
     }
     
-    /// Fetches remote properties and updates the document. 
-    private func fetchRemoteProperties(for document: SketchDocument) async {
-        guard let pageID = document.notionPageID else { return }
-        
-        // Ensure target data source known
-        if cachedTargetDataSourceID == nil {
-            cachedTargetDataSourceID = try? await notionService.fetchConnectedPagesTargetDataSourceID()
-        }
-        
-        guard let (title, _, connectedIDs) = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
-        
-        // 1. Update Title
-        if !title.isEmpty && title != document.title {
-            document.title = title
-        }
-        
-        // 2. Update Relations
-        if Set(document.connectedPageIDs) != Set(connectedIDs) {
-            document.connectedPageIDs = connectedIDs
-        }
-    }
-    
     /// Explicitly pulls the latest drawing state from Notion (Page Body).
     func pullFromNotion(document: SketchDocument) async {
          guard let pageID = document.notionPageID else { return }
          
          SyncLogger.log("⬇️ Pulling from Notion: \(document.title)")
          
-         do {
-             // Fetch Metadata
-              if let (title, _, connectedIDs) = try await notionService.fetchPageDetails(pageID: pageID) {
-                 if !title.isEmpty && title != document.title {
-                     document.title = title
-                 }
-                 if Set(document.connectedPageIDs) != Set(connectedIDs) {
-                     document.connectedPageIDs = connectedIDs
-                 }
-             }
+          do {
+               // Fetch Metadata
+                if let title = try await notionService.fetchPageTitle(pageID: pageID),
+                   !title.isEmpty && title != document.title {
+                       document.title = title
+               }
              
              // Fetch Drawing Data (Block)
              if let encoding = try await notionService.fetchPageBlocks(pageID: pageID), !encoding.isEmpty {
@@ -380,7 +347,6 @@ final class NotionSyncManager {
                 let title: String
                 let drawingData: Data
                 let notionPageID: String
-                let connectedPageIDs: [String]
             }
             
             var importedSketchData: [ImportedSketchData] = []
@@ -405,12 +371,12 @@ final class NotionSyncManager {
                         group.addTask {
                             SyncLogger.log("📥 Found new/restored page \(remoteID) — importing...")
                             
-                            do {
-                                // A. Fetch Details
-                                 guard let (title, _, connectedIDs) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
-                                    SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
-                                    return nil
-                                }
+                             do {
+                                  // A. Fetch Details
+                                   guard let title = try await self.notionService.fetchPageTitle(pageID: remoteID) else {
+                                      SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
+                                      return nil
+                                  }
                                 
                                 // B. Fetch Drawing Data (Body)
                                 guard let drawingEncoded = try await self.notionService.fetchPageBlocks(pageID: remoteID),
@@ -426,8 +392,7 @@ final class NotionSyncManager {
                                 let newSketchData = ImportedSketchData(
                                     title: title.isEmpty ? "Imported Sketch" : title,
                                     drawingData: drawingData,
-                                    notionPageID: remoteID,
-                                    connectedPageIDs: connectedIDs
+                                    notionPageID: remoteID
                                 )
                                 SyncLogger.log("✅ Imported '\(newSketchData.title)'")
                                 return newSketchData
@@ -441,7 +406,7 @@ final class NotionSyncManager {
                         // 4. Update existing? (Optional: Sync Title if changed)
                         if let existing = localMap[normalizedRemote] {
                             Task {
-                                guard let (title, _, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
+                                guard let title = try? await notionService.fetchPageTitle(pageID: existing.notionPageID ?? "") else { return }
                                 if !title.isEmpty && title != existing.title {
                                     existing.title = title
                                 }
@@ -458,7 +423,6 @@ final class NotionSyncManager {
                     drawingData: data.drawingData,
                     notionPageID: data.notionPageID
                 )
-                newSketch.connectedPageIDs = data.connectedPageIDs
                 newSketch.updateThumbnail() // Generate thumbnail
                 context.insert(newSketch)
             }

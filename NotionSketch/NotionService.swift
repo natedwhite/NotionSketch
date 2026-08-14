@@ -61,46 +61,21 @@ private struct CreatePageResponse: Decodable {
     let id: String
 }
 
-// MARK: - Database Schema Response (for finding title property name)
+// MARK: - Simple Page Response
 
-private struct DatabaseResponse: Decodable {
-    let properties: [String: DatabaseProperty]?
-}
-
-private struct DatabaseProperty: Decodable {
-    let type: String?
-    let relation: RelationConfig?
-}
-
-private struct RelationConfig: Decodable {
-    let database_id: String?
-    let data_source_id: String?
-}
-
-private struct PageDetailsResponse: Decodable {
-    let id: String
-    let properties: [String: PageProperty]
-    let icon: NotionIcon?
-}
-
-private struct NotionIcon: Decodable {
-    let type: String
-    let emoji: String?
-    let external: ExternalIcon?
-    let file: FileIcon?
-    
-    var value: String? {
-        if type == "emoji" { return emoji }
-        if type == "external" { return external?.url }
-        if type == "file" { return file?.url }
-        return nil
+private struct SimplePageResponse: Decodable {
+    struct Property: Decodable {
+        struct RichText: Decodable {
+            struct Text: Decodable {
+                let plain_text: String?
+            }
+            let text: Text?
+        }
+        let title: [RichText]?
     }
+    let properties: Property?
 }
 
-private struct ExternalIcon: Decodable { let url: String }
-private struct FileIcon: Decodable { let url: String }
-
-private struct RelationItem: Decodable { let id: String }
 
 // MARK: - Data Source Discovery Response Types
 
@@ -129,12 +104,6 @@ private struct DataSourceProperty: Decodable {
     let type: String?
 }
 
-private struct PageProperty: Decodable {
-    let type: String
-    let title: [RichText]?
-    let relation: [RelationItem]?
-    let rich_text: [RichText]?
-}
 
 // MARK: - Block List Response (for clearing page)
 
@@ -912,6 +881,29 @@ actor NotionService {
         return first.id
     }
 
+    // MARK: - Page Metadata
+    
+    /// Fetches just the title property of a Notion page.
+    func fetchPageTitle(pageID: String) async throws -> String? {
+        guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
+            throw NotionServiceError.invalidURL
+        }
+        
+        let request = try await authorizedRequest(url: url)
+        let (data, response) = try await safeRequest(request, context: "fetchPageTitle")
+        _ = try validate(data, response)
+        
+        let decoded: SimplePageResponse
+        do {
+            decoded = try JSONDecoder().decode(SimplePageResponse.self, from: data)
+        } catch {
+            let raw = String(data: data, encoding: .utf8) ?? "<binary>"
+            throw NotionServiceError.decodingFailed("fetchPageTitle: \(error.localizedDescription) — raw: \(raw)")
+        }
+        
+        return decoded.properties?.title?.first?.text?.plain_text
+    }
+    
     // MARK: - Page Content (Using Blocks)
     
     /// Fetches drawing data from the page.
@@ -1499,41 +1491,6 @@ actor NotionService {
         }
     }
 
-    // MARK: - Fetch Page Details (Title + Icon + Relations)
-    
-    /// Fetches the current title, icon, and connected page IDs from Notion.
-    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?, connectedIDs: [String])? {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
-            throw NotionServiceError.invalidURL
-        }
-        
-        let request = try await authorizedRequest(url: url, method: "GET")
-        let (data, response) = try await safeRequest(request, context: "fetchPageDetails")
-        let validatedData = try validate(data, response)
-        
-        let decoded: PageDetailsResponse
-        do {
-            decoded = try JSONDecoder().decode(PageDetailsResponse.self, from: validatedData)
-        } catch {
-            let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
-            throw NotionServiceError.decodingFailed("fetchPage: \(error.localizedDescription) — raw: \(raw.prefix(300))")
-        }
-        
-        // Find title property and connected pages relation
-        var title = "Untitled"
-        var connectedIDs: [String] = []
-        
-        for (key, property) in decoded.properties {
-            if property.type == "title", let titleObjects = property.title {
-                title = titleObjects.map { $0.text.content }.joined()
-            } else if property.type == "relation", key == "Connected Pages", let relations = property.relation {
-                connectedIDs = relations.map { $0.id }
-            }
-        }
-        
-        return (title, decoded.icon?.value, connectedIDs)
-    }
-    
     // MARK: - Archive (Trash) a Page
 
     
@@ -1762,118 +1719,6 @@ actor NotionService {
         }
         
         return foundPages
-    }
-    
-    // MARK: - Update Connected Pages (Relation)
-    
-    /// Updates the "Connected Pages" relation property for a given page.
-    func updateConnectedPages(pageID: String, targetPageIDs: [String]) async throws {
-        guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
-            throw NotionServiceError.invalidURL
-        }
-        
-        let relationObjects = targetPageIDs.map { ["id": $0] }
-        
-        let payload: [String: Any] = [
-            "properties": [
-                "Connected Pages": [
-                    "relation": relationObjects
-                ]
-            ]
-        ]
-        
-        var request = try await authorizedRequest(url: url, method: "PATCH")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        
-        let (data, response) = try await safeRequest(request, context: "updateConnectedPages")
-        
-        // Custom validation to catch missing property error
-        if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 400 {
-             let raw = String(data: data, encoding: .utf8) ?? ""
-             if raw.contains("validation_error") || raw.contains("property_not_found") {
-                 SyncLogger.log("⚠️ Failed to update 'Connected Pages': Property may not exist in Notion database.")
-                 throw NotionServiceError.appendFailed("Property 'Connected Pages' not found in Notion.")
-             }
-        }
-        
-        _ = try validate(data, response)
-        SyncLogger.log("🔗 Updated Connected Pages for \(pageID) -> \(targetPageIDs.count) links")
-    }
-    
-    // MARK: - Fetch Connected Page Details
-    
-    /// Fetches details for a set of page IDs to resolve their titles and icons.
-    func resolvePageDetails(pageIDs: [String]) async -> [String: (title: String, icon: String?)] {
-        var resolved: [String: (title: String, icon: String?)] = [:]
-        
-        await withTaskGroup(of: (String, (String, String?)?).self) { group in
-            for id in pageIDs {
-                group.addTask {
-                    if let details = try? await self.fetchPageDetails(pageID: id) {
-                        return (id, (details.title, details.icon))
-                    }
-                    return (id, nil)
-                }
-            }
-            
-            for await (id, details) in group {
-                if let d = details {
-                    resolved[id] = d
-                }
-            }
-        }
-        return resolved
-    }
-
-    // MARK: - Targeted Database Query (Search inside a DB)
-    
-    /// Queries the parent data source to find the 'Connected Pages' relation target data source ID.
-    func fetchConnectedPagesTargetDataSourceID() async throws -> String? {
-        let resolved = try await resolveSketchesContainer()
-        guard case .database(let databaseID) = resolved.ref else { return nil }
-        
-        // Use GET /v1/data_sources/{id} to get the data source schema
-        // If properties are empty, it might be that the integration doesn't have access to the CONTENT of the database, only the title?
-        // Or the 'properties' field is not returned for some reason?
-        
-        let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(databaseID)")!
-        let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-        
-        let (data, _) = try await safeRequest(request, context: "fetchConnectedPagesTarget")
-        
-        // Debug: Inspect raw keys
-        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            let objectType = json["object"] as? String ?? "unknown"
-            SyncLogger.log("ℹ️ API Object Type: \(objectType)")
-            
-            if let props = json["properties"] as? [String: Any] {
-                  let keys = props.keys.sorted().joined(separator: ", ")
-                  SyncLogger.log("🔎 RAW API Properties: \(keys)")
-            } else {
-                  SyncLogger.log("⚠️ 'properties' key missing or not a dictionary. Keys found: \(json.keys.joined(separator: ", "))")
-            }
-        } else {
-             let rawStr = String(data: data, encoding: .utf8) ?? ""
-             SyncLogger.log("⚠️ Failed to parse JSON. Raw: \(rawStr.prefix(200))...")
-        }
-
-        let decoded = try JSONDecoder().decode(DatabaseResponse.self, from: data)
-        
-        // Find "Connected Pages" property (case-insensitive) and get its relation target
-        let allKeys = decoded.properties?.keys.map { $0 } ?? []
-        SyncLogger.log("📋 Data Source Properties Found: \(allKeys.joined(separator: ", "))")
-        
-        let key = decoded.properties?.keys.first(where: { $0.localizedCaseInsensitiveCompare("Connected Pages") == .orderedSame })
-        
-        if let key = key,
-           let property = decoded.properties?[key],
-           let relation = property.relation {
-            SyncLogger.log("🔗 Found 'Connected Pages' Relation Target Data Source: \(relation.data_source_id ?? relation.database_id ?? "nil")")
-            return relation.data_source_id ?? relation.database_id
-        }
-        SyncLogger.log("⚠️ Could not find 'Connected Pages' property or relation config in data source schema.")
-        return nil
     }
 
     /// Queries a database for pages matching a title query.
