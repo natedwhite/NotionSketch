@@ -477,6 +477,38 @@ actor NotionService {
         return data
     }
 
+    /// Appends child blocks to the given block/page, in multiple PATCH requests if needed.
+    /// This avoids HTTP 413 (Payload Too Large) on large drawings.
+    private func appendChildrenBatched(
+        blockID: String,
+        children: [Block],
+        batchSize: Int = 25,
+        context: String
+    ) async throws {
+        guard batchSize > 0 else {
+            throw NotionServiceError.appendFailed("Invalid batchSize")
+        }
+        guard !children.isEmpty else { return }
+
+        let urlString = "\(NotionConfig.baseURL)/blocks/\(blockID)/children"
+        guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
+
+        var start = 0
+        while start < children.count {
+            let end = min(start + batchSize, children.count)
+            let slice = Array(children[start..<end])
+
+            var request = try await authorizedRequest(url: url, method: "PATCH")
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(AppendChildrenRequest(children: slice))
+
+            let (data, response) = try await safeRequest(request, context: "\(context)[\(start)-\(end)]")
+            _ = try validate(data, response)
+
+            start = end
+        }
+    }
+
     // MARK: - File Upload: Step 1 — Create
 
     private func createFileUpload(filename: String, contentType: String) async throws -> String {
@@ -983,27 +1015,18 @@ actor NotionService {
         // 6. Get New Toggle Block ID
         let decoded = try JSONDecoder().decode(BlockChildrenResponse.self, from: validatedData)
         guard let newToggleID = decoded.results.first?.id else {
-            // If we can't get ID for some reason, we can't append data.
-            // Just return (data is lost for this sync but prevents crash).
-            // In strict mode we could throw.
             SyncLogger.log("⚠️ Could not retrieve new Toggle Block ID. Data not saved inside toggle.")
             return
         }
         
         // 7. Append Code Blocks as children of the new Toggle Block
-        let childUrlString = "\(NotionConfig.baseURL)/blocks/\(newToggleID)/children"
-        guard let childUrl = URL(string: childUrlString) else { throw NotionServiceError.invalidURL }
-        
-        var childRequest = try await authorizedRequest(url: childUrl, method: "PATCH")
-        childRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        
-        // Append in batches of 100 blocks if needed (Notion limit)
-        // Though unlikely for one drawing to exceed 100 blocks (20MB)
-        let childRequestBody = AppendChildrenRequest(children: codeBlocks)
-        childRequest.httpBody = try JSONEncoder().encode(childRequestBody)
-        
-        let (childData, childResponse) = try await safeRequest(childRequest, context: "appendDataBlock(Children)")
-        _ = try validate(childData, childResponse)
+        // IMPORTANT: do this in batches to avoid HTTP 413.
+        try await appendChildrenBatched(
+            blockID: newToggleID,
+            children: codeBlocks,
+            batchSize: 25,
+            context: "appendDataBlock(Children)"
+        )
     }
 
     // MARK: - Clear Page Blocks
