@@ -477,35 +477,86 @@ actor NotionService {
         return data
     }
 
-    /// Appends child blocks to the given block/page, in multiple PATCH requests if needed.
-    /// This avoids HTTP 413 (Payload Too Large) on large drawings.
+    /// Appends child blocks to the given block/page, splitting the work into
+    /// multiple PATCH requests so each request body stays under `maxBatchBytes`.
+    ///
+    /// Notion rejects oversized request bodies with HTTP 413 (PayloadTooLargeError).
+    /// Each drawing code block can hold ~200KB of text (100 rich_text chunks x
+    /// 2,000 chars), so batching by block *count* is not enough — batches must be
+    /// capped by serialized *bytes*. If a batch is still rejected with 413, it is
+    /// split in half and retried recursively.
     private func appendChildrenBatched(
         blockID: String,
         children: [Block],
-        batchSize: Int = 25,
+        maxBatchBytes: Int = 512 * 1024,
         context: String
     ) async throws {
-        guard batchSize > 0 else {
-            throw NotionServiceError.appendFailed("Invalid batchSize")
-        }
         guard !children.isEmpty else { return }
 
         let urlString = "\(NotionConfig.baseURL)/blocks/\(blockID)/children"
         guard let url = URL(string: urlString) else { throw NotionServiceError.invalidURL }
 
-        var start = 0
-        while start < children.count {
-            let end = min(start + batchSize, children.count)
-            let slice = Array(children[start..<end])
+        // 1. Group blocks into batches whose serialized body stays under the byte limit.
+        let sizingEncoder = JSONEncoder()
+        var batches: [[Block]] = []
+        var currentBatch: [Block] = []
+        var currentBytes = 0
 
-            var request = try await authorizedRequest(url: url, method: "PATCH")
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(AppendChildrenRequest(children: slice))
+        for child in children {
+            let childBytes = try sizingEncoder.encode(AppendChildrenRequest(children: [child])).count
 
-            let (data, response) = try await safeRequest(request, context: "\(context)[\(start)-\(end)]")
+            if !currentBatch.isEmpty && currentBytes + childBytes > maxBatchBytes {
+                batches.append(currentBatch)
+                currentBatch = []
+                currentBytes = 0
+            }
+
+            if childBytes > maxBatchBytes {
+                SyncLogger.log("⚠️ \(context): single block serializes to \(childBytes) bytes (over \(maxBatchBytes)); sending it alone")
+            }
+
+            currentBatch.append(child)
+            currentBytes += childBytes
+        }
+        if !currentBatch.isEmpty {
+            batches.append(currentBatch)
+        }
+
+        // 2. Send batches sequentially; each batch splits + retries itself on 413.
+        for (index, batch) in batches.enumerated() {
+            try await sendChildrenBatch(
+                url: url,
+                batch: batch,
+                context: "\(context)[batch \(index + 1)/\(batches.count)]"
+            )
+        }
+    }
+
+    /// Sends one append-children request. On HTTP 413, splits the batch in half
+    /// and retries recursively until every request is accepted (a 413 means the
+    /// proxy rejected the body before processing it, so retrying smaller is safe).
+    private func sendChildrenBatch(url: URL, batch: [Block], context: String) async throws {
+        var request = try await authorizedRequest(url: url, method: "PATCH")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = try JSONEncoder().encode(AppendChildrenRequest(children: batch))
+        request.httpBody = body
+
+        SyncLogger.log("📤 \(context): \(batch.count) blocks, \(body.count) bytes")
+
+        let (data, response) = try await safeRequest(request, context: context)
+        do {
             _ = try validate(data, response)
-
-            start = end
+        } catch {
+            if case NotionServiceError.httpError(let statusCode, _) = error,
+               statusCode == 413,
+               batch.count > 1 {
+                let mid = batch.count / 2
+                SyncLogger.log("⚠️ \(context): HTTP 413 — splitting \(batch.count) blocks in half and retrying")
+                try await sendChildrenBatch(url: url, batch: Array(batch[..<mid]), context: "\(context)a")
+                try await sendChildrenBatch(url: url, batch: Array(batch[mid...]), context: "\(context)b")
+                return
+            }
+            throw error
         }
     }
 
@@ -1019,12 +1070,13 @@ actor NotionService {
             return
         }
         
-        // 7. Append Code Blocks as children of the new Toggle Block
-        // IMPORTANT: do this in batches to avoid HTTP 413.
+        // 7. Append Code Blocks as children of the new Toggle Block.
+        // Batches are capped by serialized byte size (not block count) and
+        // auto-split on HTTP 413, so each request stays under Notion's body limit.
+        SyncLogger.log("🧮 Drawing payload: \(drawingString.count) chars across \(codeBlocks.count) code blocks")
         try await appendChildrenBatched(
             blockID: newToggleID,
             children: codeBlocks,
-            batchSize: 25,
             context: "appendDataBlock(Children)"
         )
     }
