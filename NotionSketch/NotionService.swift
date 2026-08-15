@@ -442,7 +442,8 @@ actor NotionService {
     }
 
     /// Probes whether an ID refers to a data source by calling GET /v1/data_sources/{id}.
-    /// Returns true on success, false on any failure (no logging — this is a fast probe).
+    /// Returns true if the endpoint returns a valid, decodable response (any valid decode
+    /// confirms the ID is a data source — properties may be nil).
     private func probeDataSource(dataSourceID: String) async -> Bool {
         do {
             guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
@@ -452,7 +453,9 @@ actor NotionService {
             let (data, response) = try await safeRequest(request, context: "probeDataSource")
             let validatedData = try validate(data, response)
             let decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
-            return decoded.properties != nil
+            // Any successful decode at this endpoint confirms the ID is a data source.
+            _ = decoded
+            return true
         } catch {
             return false
         }
