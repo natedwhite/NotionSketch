@@ -21,6 +21,7 @@ enum NotionServiceError: LocalizedError {
     case appendFailed(String)
     case httpError(statusCode: Int, body: String)
     case decodingFailed(String)
+    case containerResolutionFailed(String)
     case notConfigured
 
     var errorDescription: String? {
@@ -37,6 +38,8 @@ enum NotionServiceError: LocalizedError {
             return "HTTP \(code): \(body)"
         case .decodingFailed(let reason):
             return "Failed to decode response: \(reason)"
+        case .containerResolutionFailed(let id):
+            return "Could not resolve Notion container \(id) as a data source or database. Make sure the ID is correct and the integration is connected to that container."
         case .notConfigured:
             return "Notion API token or container not configured."
         }
@@ -388,18 +391,44 @@ actor NotionService {
             SyncLogger.log("📦 Resolved container: data_source (\(id)), no fallback database")
             return ResolvedNotionContainer(ref: .dataSource(id: id), fallbackDatabaseID: nil)
 
-        case .database(let dbID):
-            if let discovered = try await discoverDataSource(fromDatabase: dbID) {
-                SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
-                return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
+        case .database(let candidateID):
+            let isBareID = NotionContainerParser.normalizedID(input) == candidateID
+
+            // A bare UUID is inherently ambiguous. Probe the new data-source endpoint
+            // first so a real data source ID is never sent to a database endpoint after
+            // a swallowed probe/decode failure.
+            if isBareID {
+                SyncLogger.log("🔎 Resolving bare Notion container ID: \(candidateID)")
+
+                if await probeDataSource(dataSourceID: candidateID) {
+                    SyncLogger.log("📦 Resolved container: data_source (\(candidateID)) from bare ID probe")
+                    return ResolvedNotionContainer(ref: .dataSource(id: candidateID), fallbackDatabaseID: nil)
+                }
+
+                if let discovered = try await discoverDataSource(fromDatabase: candidateID) {
+                    SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from bare database ID (\(candidateID))")
+                    return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: candidateID)
+                }
+
+                SyncLogger.log("❌ Bare container ID \(candidateID) was not recognized by either the data-source or database endpoint")
+                throw NotionServiceError.containerResolutionFailed(candidateID)
             }
-            // Discovery failed — the ID may itself be a data source ID. Probe it.
-            if await probeDataSource(dataSourceID: dbID) {
-                SyncLogger.log("📦 Resolved container: data_source (\(dbID)) from bare ID probe")
-                return ResolvedNotionContainer(ref: .dataSource(id: dbID), fallbackDatabaseID: nil)
+
+            // For a URL parsed as a database, preserve database-first discovery. Some
+            // copied data-source links do not carry an explicit data-source marker, so
+            // a failed database lookup is followed by the same 2xx endpoint probe.
+            if let discovered = try await discoverDataSource(fromDatabase: candidateID) {
+                SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(candidateID))")
+                return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: candidateID)
             }
-            SyncLogger.log("📦 Resolved container: database (\(dbID))")
-            return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
+
+            if await probeDataSource(dataSourceID: candidateID) {
+                SyncLogger.log("📦 Resolved container: data_source (\(candidateID)) from URL probe")
+                return ResolvedNotionContainer(ref: .dataSource(id: candidateID), fallbackDatabaseID: nil)
+            }
+
+            SyncLogger.log("📦 Resolved container: database (\(candidateID))")
+            return ResolvedNotionContainer(ref: .database(id: candidateID), fallbackDatabaseID: candidateID)
         }
     }
 
@@ -412,7 +441,7 @@ actor NotionService {
                 return nil
             }
 
-            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
             let (data, response) = try await safeRequest(request, context: "discoverDataSource")
             let validatedData = try validate(data, response)
 
@@ -442,21 +471,34 @@ actor NotionService {
     }
 
     /// Probes whether an ID refers to a data source by calling GET /v1/data_sources/{id}.
-    /// Returns true if the endpoint returns a valid, decodable response (any valid decode
-    /// confirms the ID is a data source — properties may be nil).
+    /// Any 2xx response proves that the ID belongs to this endpoint. The body is not
+    /// decoded because schema shape is unrelated to container identity.
     private func probeDataSource(dataSourceID: String) async -> Bool {
         do {
             guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
+                SyncLogger.log("⚠️ Data source probe: invalid URL for \(dataSourceID)")
                 return false
             }
-            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+
+            let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
             let (data, response) = try await safeRequest(request, context: "probeDataSource")
-            let validatedData = try validate(data, response)
-            let decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
-            // Any successful decode at this endpoint confirms the ID is a data source.
-            _ = decoded
-            return true
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                SyncLogger.log("⚠️ Data source probe returned a non-HTTP response for \(dataSourceID)")
+                return false
+            }
+
+            if (200...299).contains(httpResponse.statusCode) {
+                SyncLogger.log("✅ Data source probe succeeded for \(dataSourceID) (HTTP \(httpResponse.statusCode))")
+                return true
+            }
+
+            let rawBody = String(data: data, encoding: .utf8) ?? "<binary>"
+            let compactBody = rawBody.replacingOccurrences(of: "\n", with: " ")
+            SyncLogger.log("ℹ️ Data source probe failed for \(dataSourceID): HTTP \(httpResponse.statusCode) — \(compactBody.prefix(300))")
+            return false
         } catch {
+            SyncLogger.log("⚠️ Data source probe failed for \(dataSourceID): \(error.localizedDescription)")
             return false
         }
     }
@@ -830,7 +872,7 @@ actor NotionService {
                 throw NotionServiceError.invalidURL
             }
 
-            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
             let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
             let validatedData = try validate(data, response)
 
