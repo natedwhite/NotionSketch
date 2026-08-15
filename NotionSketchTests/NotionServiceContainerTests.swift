@@ -13,7 +13,7 @@ final class NotionServiceContainerTests: XCTestCase {
     // MARK: - Container URLs
 
     static var databaseURL: String { "https://www.notion.so/\(Self.databaseID)" }
-    static var dataSourceURL: String { "https://www.notion.so/data-source/\(Self.dataSourceID)" }
+    static var dataSourceURL: String { "https://www.notion.so/\(Self.dataSourceID)" }
 
     // MARK: - Service and session
 
@@ -258,12 +258,15 @@ final class NotionServiceContainerTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
 
             case 3:
+                // Fallback re-resolves the data source ID via the discovery endpoint (2025-09-03).
                 XCTAssertEqual(request.httpMethod, "GET")
                 XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dbSchemaJSON(titleProp: "Database Title"))
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSON(dataSourceID: Self.dataSourceID))
 
             case 4:
+                // Database-parent creation is a deliberate legacy fallback pinned to 2022-06-28.
+                // Title property name comes from the case-1 schema lookup (cached for the same data source ID).
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.url?.path, "/v1/pages")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
@@ -273,7 +276,7 @@ final class NotionServiceContainerTests: XCTestCase {
                 XCTAssertEqual(parent?["type"] as? String, "database_id")
                 XCTAssertEqual(parent?["database_id"] as? String, Self.databaseID)
                 let props = body["properties"] as? [String: Any]
-                XCTAssertNotNil(props?["Database Title"])
+                XCTAssertNotNil(props?["Sketch Title"])
 
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.createPageResponse(id: Self.pageID))
 
@@ -374,6 +377,7 @@ final class NotionServiceContainerTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
 
             case 2:
+                // Deliberate legacy fallback: /databases/{id}/query stays pinned to 2022-06-28.
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)/query")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
@@ -414,9 +418,10 @@ final class NotionServiceContainerTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Sketch Title"))
 
             case 1:
+                // /pages endpoints are version-agnostic; they now send the new default version (2025-09-03).
                 XCTAssertEqual(request.httpMethod, "PATCH")
                 XCTAssertEqual(request.url?.path, "/v1/pages/\(Self.pageID)")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
 
                 let body = self.bodyJSON(from: request)
                 let props = body["properties"] as? [String: Any]
@@ -457,12 +462,21 @@ final class NotionServiceContainerTests: XCTestCase {
 
             switch count {
             case 0:
+                // The database title query first resolves the data source ID via the discovery endpoint (2025-09-03).
                 XCTAssertEqual(request.httpMethod, "GET")
                 XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
-                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dbSchemaJSON(titleProp: "Name"))
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSON(dataSourceID: Self.dataSourceID))
 
             case 1:
+                // Then reads the title property name from the data source schema.
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Name"))
+
+            case 2:
+                // Deliberate legacy fallback: /databases/{id}/query stays pinned to 2022-06-28.
                 XCTAssertEqual(request.httpMethod, "POST")
                 XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)/query")
                 XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2022-06-28")
@@ -489,7 +503,7 @@ final class NotionServiceContainerTests: XCTestCase {
         }
 
         _ = try await service.queryContainer(ref: .database(id: Self.databaseID), query: "search term")
-        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 2)
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 3)
     }
 
     func testDataSourceTitleQuery() async throws {

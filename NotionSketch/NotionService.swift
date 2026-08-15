@@ -7,7 +7,7 @@ import Observation
 // MARK: - Configuration
 
 enum NotionConfig {
-    static let apiVersion = "2022-06-28"
+    static let apiVersion = "2025-09-03"
     static let dataSourceApiVersion = "2025-09-03"
     static let baseURL = "https://api.notion.com/v1"
 }
@@ -672,7 +672,8 @@ actor NotionService {
         let titlePropertyName = try await getDataSourceTitlePropertyName(dataSourceID: resolvedDataSourceID)
         return try await createPageInContainer(
             parentPayload: ["type": "database_id", "database_id": databaseID],
-            apiVersion: nil,
+            // Deliberate legacy fallback: database-parent creation requires the legacy API version.
+            apiVersion: "2022-06-28",
             titlePropertyName: titlePropertyName,
             title: title,
             ocrText: ocrText,
@@ -725,7 +726,8 @@ actor NotionService {
             let dbTitleProp = try await getDataSourceTitlePropertyName(dataSourceID: fallbackDSID)
             return try await createPageInContainer(
                 parentPayload: ["type": "database_id", "database_id": fallbackDB],
-                apiVersion: nil,
+                // Deliberate legacy fallback: database-parent creation requires the legacy API version.
+                apiVersion: "2022-06-28",
                 titlePropertyName: dbTitleProp,
                 title: title,
                 ocrText: ocrText,
@@ -1631,7 +1633,8 @@ actor NotionService {
             throw NotionServiceError.invalidURL
         }
 
-        return try await queryContainerPages(url: url, apiVersion: nil, query: query)
+        // Deliberate legacy fallback: /databases/{id}/query requires the legacy API version.
+        return try await queryContainerPages(url: url, apiVersion: "2022-06-28", query: query)
     }
 
     /// Queries a data source for active (non-archived) page IDs using new API version.
@@ -1780,7 +1783,8 @@ actor NotionService {
         let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
         return try await queryWithTitle(
             url: URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query")!,
-            apiVersion: nil,
+            // Deliberate legacy fallback: /databases/{id}/query requires the legacy API version.
+            apiVersion: "2022-06-28",
             titleKey: titleKey,
             query: query
         )
