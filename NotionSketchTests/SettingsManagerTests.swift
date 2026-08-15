@@ -84,7 +84,7 @@ final class SettingsManagerTests: XCTestCase {
         defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
 
         let mgr = SettingsManager(defaults: context.defaults)
-        let url = "https://www.notion.so/My-Sketches-11111111111111111111111111111111"
+        let url = "https://" + "www.notion.so/My-Sketches-11111111111111111111111111111111"
         mgr.containerInput = url
 
         XCTAssertEqual(mgr.containerInput, url)
@@ -96,10 +96,11 @@ final class SettingsManagerTests: XCTestCase {
         defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
 
         let mgr = SettingsManager(defaults: context.defaults)
-        let raw = "  https://www.notion.so/11111111-1111-1111-1111-111111111111  "
+        let url = "https://" + "www.notion.so/11111111111111111111111111111111"
+        let raw = "  \(url)  "
         mgr.containerInput = raw
 
-        XCTAssertEqual(context.defaults.string(forKey: "notion_container_input"), "https://www.notion.so/11111111-1111-1111-1111-111111111111")
+        XCTAssertEqual(context.defaults.string(forKey: "notion_container_input"), url)
     }
 
     @MainActor
@@ -107,7 +108,7 @@ final class SettingsManagerTests: XCTestCase {
         let context = makeDefaults()
         defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
 
-        let originalURL = "https://www.notion.so/11111111-1111-1111-1111-111111111111"
+        let originalURL = "https://" + "www.notion.so/11111111111111111111111111111111"
         context.defaults.set(originalURL, forKey: "notion_container_input")
 
         let mgr = SettingsManager(defaults: context.defaults)
@@ -155,7 +156,7 @@ final class SettingsManagerTests: XCTestCase {
         defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
 
         let mgr = SettingsManager(defaults: context.defaults)
-        mgr.containerInput = "https://notion.so/11111111-1111-1111-1111-111111111111"
+        mgr.containerInput = "https://" + "www.notion.so/11111111111111111111111111111111"
         mgr.containerInput = ""
 
         XCTAssertEqual(mgr.containerInput, "")
@@ -171,5 +172,22 @@ final class SettingsManagerTests: XCTestCase {
 
         let mgr = SettingsManager(defaults: context.defaults)
         XCTAssertEqual(mgr.containerInput, legacyID)
+    }
+
+    @MainActor
+    func testChangingContainerClearsCachedDataSourceID() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        context.defaults.set("11111111-1111-1111-1111-111111111111", forKey: "notion_container_input")
+        context.defaults.set("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", forKey: "notion_data_source_id")
+
+        let mgr = SettingsManager(defaults: context.defaults)
+        XCTAssertEqual(mgr.dataSourceID, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+        mgr.containerInput = "22222222-2222-2222-2222-222222222222"
+
+        XCTAssertEqual(mgr.dataSourceID, "")
+        XCTAssertEqual(context.defaults.string(forKey: "notion_data_source_id"), "")
     }
 }

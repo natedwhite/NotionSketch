@@ -37,7 +37,7 @@ final class SettingsManager {
         didSet { defaults.set(shortIoDomain, forKey: Keys.shortIoDomain) }
     }
 
-    /// Cached data source ID resolved from the database via Notion API.
+    /// Cached data source ID resolved from the currently configured database.
     var dataSourceID: String {
         didSet { defaults.set(dataSourceID, forKey: Keys.dataSourceID) }
     }
@@ -45,7 +45,16 @@ final class SettingsManager {
     /// Raw input from the user — could be a database URL, data source URL, or just an ID.
     var containerInput: String {
         didSet {
-            defaults.set(containerInput.trimmingCharacters(in: .whitespacesAndNewlines), forKey: Keys.containerInput)
+            let trimmed = containerInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(trimmed, forKey: Keys.containerInput)
+
+            // A resolved data source ID belongs to the previous container. Keeping it
+            // after the user changes containers can make legacy paths address the wrong
+            // object, so invalidate it immediately.
+            let oldTrimmed = oldValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed != oldTrimmed, !dataSourceID.isEmpty {
+                dataSourceID = ""
+            }
         }
     }
 

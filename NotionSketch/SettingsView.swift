@@ -124,7 +124,7 @@ struct SettingsView: View {
 
                             Button("Clear", role: .destructive) {
                                 SyncLogger.clearLog()
-                                syncLogText = "(cleared)"
+                                syncLogText = SyncLogger.readLog()
                             }
                             .buttonStyle(.bordered)
                         }
@@ -146,6 +146,18 @@ struct SettingsView: View {
             }
             .onAppear {
                 syncLogText = SyncLogger.readLog()
+            }
+            .task {
+                // Keep diagnostics current while Settings is visible. Previously the
+                // view captured one snapshot, which made successful writes look empty.
+                while !Task.isCancelled {
+                    syncLogText = SyncLogger.readLog()
+                    do {
+                        try await Task.sleep(for: .seconds(1))
+                    } catch {
+                        break
+                    }
+                }
             }
         }
     }
