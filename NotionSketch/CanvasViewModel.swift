@@ -48,8 +48,6 @@ enum SyncState: Equatable {
 final class CanvasViewModel {
 
     // MARK: - Published State
-
-    // MARK: - Published State
     
     /// Current sync state — drives the UI status indicator.
     var syncState: SyncState {
@@ -169,7 +167,7 @@ final class CanvasViewModel {
         guard SettingsManager.shared.isConfigured else { return }
         
         do {
-            if let title = try await notionService.fetchPageTitle(pageID: pageID) {
+            if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")
@@ -219,10 +217,4 @@ final class CanvasViewModel {
         let thumbnail = drawing.image(from: imageRect, scale: scale)
         document.thumbnailData = thumbnail.pngData()
     }
-
-
-
-    // MARK: - Connected Pages Logic
-    
-    // scheduleSuccessDismiss removed (managed by NotionSyncManager)
 }

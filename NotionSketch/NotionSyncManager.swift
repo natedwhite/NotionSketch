@@ -282,7 +282,7 @@ final class NotionSyncManager {
          
           do {
                // Fetch Metadata
-                if let title = try await notionService.fetchPageTitle(pageID: pageID),
+                if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID),
                    !title.isEmpty && title != document.title {
                        document.title = title
                }
@@ -373,7 +373,7 @@ final class NotionSyncManager {
                             
                              do {
                                   // A. Fetch Details
-                                   guard let title = try await self.notionService.fetchPageTitle(pageID: remoteID) else {
+                                   guard let (title, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
                                       SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
                                       return nil
                                   }
@@ -406,7 +406,7 @@ final class NotionSyncManager {
                         // 4. Update existing? (Optional: Sync Title if changed)
                         if let existing = localMap[normalizedRemote] {
                             Task {
-                                guard let title = try? await notionService.fetchPageTitle(pageID: existing.notionPageID ?? "") else { return }
+                                guard let (title, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
                                 if !title.isEmpty && title != existing.title {
                                     existing.title = title
                                 }
