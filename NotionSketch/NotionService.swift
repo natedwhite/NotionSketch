@@ -1729,13 +1729,14 @@ actor NotionService {
         var foundPages: [(id: String, title: String, icon: String?, parentID: String?)] = []
         
         for object in results {
+            guard object["object"] as? String == "page" else { continue }
             guard let id = object["id"] as? String,
                   let properties = object["properties"] as? [String: Any] else { continue }
             
-            // Extract Parent Database ID
+            // Extract Parent Data Source ID (falls back to legacy Database ID)
             var parentID: String? = nil
             if let parent = object["parent"] as? [String: Any] {
-                parentID = parent["database_id"] as? String
+                parentID = (parent["data_source_id"] as? String) ?? (parent["database_id"] as? String)
             }
 
             // Find title property
