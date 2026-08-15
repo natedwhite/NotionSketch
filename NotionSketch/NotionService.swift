@@ -61,19 +61,35 @@ private struct CreatePageResponse: Decodable {
     let id: String
 }
 
-// MARK: - Simple Page Response
+// MARK: - Page Details Response (Title + Icon)
 
-private struct SimplePageResponse: Decodable {
-    struct Property: Decodable {
-        struct RichText: Decodable {
-            struct Text: Decodable {
-                let plain_text: String?
-            }
-            let text: Text?
-        }
-        let title: [RichText]?
+private struct PageDetailsResponse: Decodable {
+    let id: String
+    let properties: [String: PageProperty]
+    let icon: NotionIcon?
+}
+
+private struct NotionIcon: Decodable {
+    let type: String
+    let emoji: String?
+    let external: ExternalIcon?
+    let file: FileIcon?
+
+    var value: String? {
+        if type == "emoji" { return emoji }
+        if type == "external" { return external?.url }
+        if type == "file" { return file?.url }
+        return nil
     }
-    let properties: Property?
+}
+
+private struct ExternalIcon: Decodable { let url: String }
+private struct FileIcon: Decodable { let url: String }
+
+private struct PageProperty: Decodable {
+    let type: String
+    let title: [RichText]?
+    let rich_text: [RichText]?
 }
 
 
@@ -881,27 +897,63 @@ actor NotionService {
         return first.id
     }
 
-    // MARK: - Page Metadata
-    
-    /// Fetches just the title property of a Notion page.
-    func fetchPageTitle(pageID: String) async throws -> String? {
+    // MARK: - Page Metadata (Title + Icon)
+
+    /// Fetches the current title and icon of a Notion page.
+    /// Property names are dynamic, so the title is found by scanning for the `title` property type.
+    func fetchPageDetails(pageID: String) async throws -> (title: String, icon: String?)? {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages/\(pageID)") else {
             throw NotionServiceError.invalidURL
         }
-        
-        let request = try await authorizedRequest(url: url)
-        let (data, response) = try await safeRequest(request, context: "fetchPageTitle")
-        _ = try validate(data, response)
-        
-        let decoded: SimplePageResponse
+
+        let request = try await authorizedRequest(url: url, method: "GET")
+        let (data, response) = try await safeRequest(request, context: "fetchPageDetails")
+        let validatedData = try validate(data, response)
+
+        let decoded: PageDetailsResponse
         do {
-            decoded = try JSONDecoder().decode(SimplePageResponse.self, from: data)
+            decoded = try JSONDecoder().decode(PageDetailsResponse.self, from: validatedData)
         } catch {
-            let raw = String(data: data, encoding: .utf8) ?? "<binary>"
-            throw NotionServiceError.decodingFailed("fetchPageTitle: \(error.localizedDescription) — raw: \(raw)")
+            let raw = String(data: validatedData, encoding: .utf8) ?? "<binary>"
+            throw NotionServiceError.decodingFailed("fetchPage: \(error.localizedDescription) — raw: \(raw.prefix(300))")
         }
-        
-        return decoded.properties?.title?.first?.text?.plain_text
+
+        // Find the title property (property names are dynamic, so scan by type)
+        var title = "Untitled"
+        for (_, property) in decoded.properties {
+            if property.type == "title", let titleObjects = property.title {
+                title = titleObjects.map { $0.text.content }.joined()
+            }
+        }
+
+        return (title, decoded.icon?.value)
+    }
+
+    // MARK: - Resolve Page Details (Bulk)
+
+    /// Fetches titles and icons for a set of page IDs.
+    /// Generic resolver retained for reuse by upcoming features (e.g. sketch placements);
+    /// having no callers right now is intentional.
+    func resolvePageDetails(pageIDs: [String]) async -> [String: (title: String, icon: String?)] {
+        var resolved: [String: (title: String, icon: String?)] = [:]
+
+        await withTaskGroup(of: (String, (String, String?)?).self) { group in
+            for id in pageIDs {
+                group.addTask {
+                    if let details = try? await self.fetchPageDetails(pageID: id) {
+                        return (id, (details.title, details.icon))
+                    }
+                    return (id, nil)
+                }
+            }
+
+            for await (id, details) in group {
+                if let d = details {
+                    resolved[id] = d
+                }
+            }
+        }
+        return resolved
     }
     
     // MARK: - Page Content (Using Blocks)
