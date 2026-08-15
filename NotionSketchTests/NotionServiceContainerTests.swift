@@ -13,7 +13,8 @@ final class NotionServiceContainerTests: XCTestCase {
     // MARK: - Container URLs
 
     static var databaseURL: String { "https://www.notion.so/\(Self.databaseID)" }
-    static var dataSourceURL: String { "https://www.notion.so/\(Self.dataSourceID)" }
+    // Marked data source URL — the parser recognizes /data_sources/ path segments.
+    static var dataSourceURL: String { "notion.so-261" }
 
     // MARK: - Service and session
 
@@ -146,31 +147,61 @@ final class NotionServiceContainerTests: XCTestCase {
     func testDiscoveryHTTPFailure() async throws {
         service = makeService(containerInput: Self.databaseURL)
 
+        var callCount = 0
         MockURLProtocol.setHandler { [self] request in
-            XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
-            return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "1.1", headerFields: nil)!, Data())
+            defer { callCount += 1 }
+            let count = callCount
+
+            switch count {
+            case 0:
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "1.1", headerFields: nil)!, Data())
+            case 1:
+                // probeDataSource also fails — the ID is neither a database nor a data source.
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: "1.1", headerFields: nil)!, Data())
+            default:
+                XCTFail("Unexpected request")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
         }
 
         let resolved = try await service.resolveSketchesContainer()
         XCTAssertEqual(resolved.ref, .database(id: Self.databaseID))
         XCTAssertEqual(resolved.fallbackDatabaseID, Self.databaseID)
-        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 1)
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 2)
     }
 
     func testDiscoveryDecodingFailure() async throws {
         service = makeService(containerInput: Self.databaseURL)
 
+        var callCount = 0
         MockURLProtocol.setHandler { [self] request in
-            XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
-            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data("invalid json".utf8))
+            defer { callCount += 1 }
+            let count = callCount
+
+            switch count {
+            case 0:
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data("invalid json".utf8))
+            case 1:
+                // probeDataSource also fails (invalid json).
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.databaseID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, Data("invalid json".utf8))
+            default:
+                XCTFail("Unexpected request")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
         }
 
         let resolved = try await service.resolveSketchesContainer()
         XCTAssertEqual(resolved.ref, .database(id: Self.databaseID))
         XCTAssertEqual(resolved.fallbackDatabaseID, Self.databaseID)
-        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 1)
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 2)
     }
 
     func testExplicitDataSourceInput() async throws {
@@ -180,6 +211,39 @@ final class NotionServiceContainerTests: XCTestCase {
         XCTAssertEqual(resolved.ref, .dataSource(id: Self.dataSourceID))
         XCTAssertNil(resolved.fallbackDatabaseID)
         XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 0)
+    }
+
+    func testBareDataSourceIDResolution() async throws {
+        // Feed a bare data source ID — parser treats bare IDs as databases,
+        // but the resolver should probe and identify it as a data source.
+        service = makeService(containerInput: Self.dataSourceID)
+
+        var callCount = 0
+        MockURLProtocol.setHandler { [self] request in
+            defer { callCount += 1 }
+            let count = callCount
+
+            switch count {
+            case 0:
+                // First: discovery returns an empty data_sources list.
+                XCTAssertEqual(request.url?.path, "/v1/databases/\(Self.dataSourceID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.discoveryJSONEmpty())
+            case 1:
+                // Second: probeDataSource succeeds — it IS a data source.
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "1.1", headerFields: ["Content-Type": "application/json"])!, self.dsSchemaJSON(titleProp: "Name"))
+            default:
+                XCTFail("Unexpected request")
+                return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!, Data())
+            }
+        }
+
+        let resolved = try await service.resolveSketchesContainer()
+        XCTAssertEqual(resolved.ref, .dataSource(id: Self.dataSourceID))
+        XCTAssertNil(resolved.fallbackDatabaseID)
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 2)
     }
 
     // MARK: - Section 6: Data-Source Schema Tests

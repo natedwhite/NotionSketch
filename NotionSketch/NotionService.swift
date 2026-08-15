@@ -393,6 +393,11 @@ actor NotionService {
                 SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(dbID))")
                 return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: dbID)
             }
+            // Discovery failed — the ID may itself be a data source ID. Probe it.
+            if await probeDataSource(dataSourceID: dbID) {
+                SyncLogger.log("📦 Resolved container: data_source (\(dbID)) from bare ID probe")
+                return ResolvedNotionContainer(ref: .dataSource(id: dbID), fallbackDatabaseID: nil)
+            }
             SyncLogger.log("📦 Resolved container: database (\(dbID))")
             return ResolvedNotionContainer(ref: .database(id: dbID), fallbackDatabaseID: dbID)
         }
@@ -433,6 +438,23 @@ actor NotionService {
         } catch {
             SyncLogger.log("⚠️ Data source discovery failed for database \(databaseID): \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    /// Probes whether an ID refers to a data source by calling GET /v1/data_sources/{id}.
+    /// Returns true on success, false on any failure (no logging — this is a fast probe).
+    private func probeDataSource(dataSourceID: String) async -> Bool {
+        do {
+            guard let url = URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)") else {
+                return false
+            }
+            var request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
+            let (data, response) = try await safeRequest(request, context: "probeDataSource")
+            let validatedData = try validate(data, response)
+            let decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
+            return decoded.properties != nil
+        } catch {
+            return false
         }
     }
 
