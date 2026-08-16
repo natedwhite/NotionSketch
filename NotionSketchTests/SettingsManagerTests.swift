@@ -190,4 +190,84 @@ final class SettingsManagerTests: XCTestCase {
         XCTAssertEqual(mgr.dataSourceID, "")
         XCTAssertEqual(context.defaults.string(forKey: "notion_data_source_id"), "")
     }
+
+    // MARK: - Property Mapping
+
+    @MainActor
+    func testPropertyMappingsDefaultToEmpty() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        let mgr = SettingsManager(defaults: context.defaults)
+
+        XCTAssertTrue(mgr.propertyMappings.isEmpty)
+        XCTAssertEqual(mgr.mappedPropertyName(for: .ocrText), "OCR")
+        XCTAssertEqual(mgr.mappedPropertyName(for: .appLink), "Open in App")
+        // Title has no hard-coded default: nil means "discover from the schema".
+        XCTAssertNil(mgr.mappedPropertyName(for: .title))
+    }
+
+    @MainActor
+    func testPropertyMappingsPersistAndReload() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        let mgr = SettingsManager(defaults: context.defaults)
+        mgr.propertyMappings = [
+            SketchPropertyFunction.ocrText.rawValue: "Transcript",
+            SketchPropertyFunction.appLink.rawValue: "Launch"
+        ]
+
+        let reloaded = SettingsManager(defaults: context.defaults)
+        XCTAssertEqual(reloaded.propertyMappings["ocrText"], "Transcript")
+        XCTAssertEqual(reloaded.propertyMappings["appLink"], "Launch")
+        XCTAssertEqual(reloaded.mappedPropertyName(for: .ocrText), "Transcript")
+        XCTAssertEqual(reloaded.mappedPropertyName(for: .appLink), "Launch")
+    }
+
+    @MainActor
+    func testEmptyMappedValueSkipsProperty() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        let mgr = SettingsManager(defaults: context.defaults)
+        mgr.propertyMappings = [SketchPropertyFunction.ocrText.rawValue: ""]
+
+        XCTAssertNil(mgr.mappedPropertyName(for: .ocrText))
+        XCTAssertEqual(mgr.mappedPropertyName(for: .appLink), "Open in App")
+    }
+
+    @MainActor
+    func testWhitespaceMappedValueSkipsProperty() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        let mgr = SettingsManager(defaults: context.defaults)
+        mgr.propertyMappings = [SketchPropertyFunction.appLink.rawValue: "   "]
+
+        XCTAssertNil(mgr.mappedPropertyName(for: .appLink))
+        XCTAssertEqual(mgr.mappedPropertyName(for: .ocrText), "OCR")
+    }
+
+    @MainActor
+    func testCorruptMappingDataFallsBackToEmpty() {
+        let context = makeDefaults()
+        defer { context.defaults.removePersistentDomain(forName: context.suiteName) }
+
+        context.defaults.set(Data("not json".utf8), forKey: "notion_property_mappings")
+
+        let mgr = SettingsManager(defaults: context.defaults)
+        XCTAssertTrue(mgr.propertyMappings.isEmpty)
+        XCTAssertEqual(mgr.mappedPropertyName(for: .ocrText), "OCR")
+    }
+
+    func testPropertyFunctionDefaultsAndTypes() {
+        XCTAssertEqual(SketchPropertyFunction.ocrText.defaultPropertyName, "OCR")
+        XCTAssertEqual(SketchPropertyFunction.appLink.defaultPropertyName, "Open in App")
+        XCTAssertNil(SketchPropertyFunction.title.defaultPropertyName)
+        XCTAssertEqual(SketchPropertyFunction.title.requiredNotionType, "title")
+        XCTAssertEqual(SketchPropertyFunction.ocrText.requiredNotionType, "rich_text")
+        XCTAssertEqual(SketchPropertyFunction.appLink.requiredNotionType, "url")
+        XCTAssertEqual(SketchPropertyFunction.allCases.count, 3)
+    }
 }
