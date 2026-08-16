@@ -428,7 +428,7 @@ actor NotionService {
                     return ResolvedNotionContainer(ref: .dataSource(id: candidateID), fallbackDatabaseID: nil)
                 }
 
-                if let discovered = try await discoverDataSource(fromDatabase: candidateID) {
+                if let discovered = await discoverDataSource(fromDatabase: candidateID) {
                     SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from bare database ID (\(candidateID))")
                     return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: candidateID)
                 }
@@ -440,7 +440,7 @@ actor NotionService {
             // For a URL parsed as a database, preserve database-first discovery. Some
             // copied data-source links do not carry an explicit data-source marker, so
             // a failed database lookup is followed by the same 2xx endpoint probe.
-            if let discovered = try await discoverDataSource(fromDatabase: candidateID) {
+            if let discovered = await discoverDataSource(fromDatabase: candidateID) {
                 SyncLogger.log("📦 Resolved container: data_source (\(discovered)) from database (\(candidateID))")
                 return ResolvedNotionContainer(ref: .dataSource(id: discovered), fallbackDatabaseID: candidateID)
             }
@@ -709,10 +709,9 @@ actor NotionService {
             throw NotionServiceError.decodingFailed("sendFileUpload: \(error.localizedDescription) — raw: \(raw)")
         }
 
-        guard decoded.status != "uploaded" else {
-            return
+        guard decoded.status == "uploaded" else {
+            throw NotionServiceError.uploadFailed("File upload did not complete. Status: \(decoded.status)")
         }
-        throw NotionServiceError.uploadFailed("File upload did not complete. Status: \(decoded.status)")
     }
 
     // MARK: - Public: Upload Drawing Image
@@ -1559,9 +1558,9 @@ actor NotionService {
                 switch resolved.ref {
                 case .database(let dbID):
                     let dsID = try await fetchDataSourceID(databaseID: dbID)
-                    titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+                    titleProp = await getDataSourceTitlePropertyName(dataSourceID: dsID)
                 case .dataSource(let dsID):
-                    titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+                    titleProp = await getDataSourceTitlePropertyName(dataSourceID: dsID)
                 }
             }
             properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
@@ -1976,7 +1975,7 @@ actor NotionService {
     /// Queries a database for pages matching a title query.
     private func queryPagesInDatabaseWithTitle(databaseID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
         let dsID = try await fetchDataSourceID(databaseID: databaseID)
-        let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+        let titleKey = await getDataSourceTitlePropertyName(dataSourceID: dsID)
         return try await queryWithTitle(
             url: URL(string: "\(NotionConfig.baseURL)/databases/\(databaseID)/query")!,
             // Deliberate legacy fallback: /databases/{id}/query requires the legacy API version.
@@ -1988,7 +1987,7 @@ actor NotionService {
 
     /// Queries a data source for pages matching a title query.
     private func queryPagesInDataSourceWithTitle(dataSourceID: String, query: String) async throws -> [(id: String, title: String, icon: String?)] {
-        let titleKey = try await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+        let titleKey = await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
         return try await queryWithTitle(
             url: URL(string: "\(NotionConfig.baseURL)/data_sources/\(dataSourceID)/query")!,
             apiVersion: NotionConfig.dataSourceApiVersion,
@@ -2092,7 +2091,6 @@ actor NotionService {
             guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(blockID)") else { continue }
             let request = try await authorizedRequest(url: url, method: "DELETE")
             _ = try await safeRequest(request, context: "deleteLegacyPreview")
-            _ = try validate(data, response)
         }
         
         if !blocksToDelete.isEmpty {
