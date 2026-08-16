@@ -336,14 +336,17 @@ actor NotionService {
     private let session: URLSession
     private let tokenOverride: String?
     private let containerInputOverride: String?
+    private let propertyMappingOverride: [String: String]?
 
     init(
         session: URLSession? = nil,
         tokenOverride: String? = nil,
-        containerInputOverride: String? = nil
+        containerInputOverride: String? = nil,
+        propertyMappingOverride: [String: String]? = nil
     ) {
         self.tokenOverride = tokenOverride
         self.containerInputOverride = containerInputOverride
+        self.propertyMappingOverride = propertyMappingOverride
 
         if let session = session {
             self.session = session
@@ -372,6 +375,26 @@ actor NotionService {
             return override
         }
         return await MainActor.run { SettingsManager.shared.containerInput }
+    }
+
+    // MARK: - Property Mapping Access
+
+    /// Reads the current property mappings from SettingsManager (must hop to MainActor).
+    private func getPropertyMappings() async -> [String: String] {
+        if let override = propertyMappingOverride {
+            return override
+        }
+        return await MainActor.run { SettingsManager.shared.propertyMappings }
+    }
+
+    /// Resolves the effective property name for a function from a raw mapping dictionary.
+    /// A missing key uses the function's default; an empty string explicitly skips the write.
+    private func mappedName(for function: SketchPropertyFunction, in mappings: [String: String]) -> String? {
+        if let mapped = mappings[function.rawValue] {
+            let trimmed = mapped.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        return function.defaultPropertyName
     }
 
     /// Resolves the active container with optional database-to-data-source discovery.
@@ -686,9 +709,10 @@ actor NotionService {
             throw NotionServiceError.decodingFailed("sendFileUpload: \(error.localizedDescription) — raw: \(raw)")
         }
 
-        guard decoded.status == "uploaded" else {
-            throw NotionServiceError.uploadFailed("File upload did not complete. Status: \(decoded.status)")
+        guard decoded.status != "uploaded" else {
+            return
         }
+        throw NotionServiceError.uploadFailed("File upload did not complete. Status: \(decoded.status)")
     }
 
     // MARK: - Public: Upload Drawing Image
@@ -736,12 +760,14 @@ actor NotionService {
     /// Creates a page in a Notion database using legacy API.
     private func createPageInDatabaseInternal(databaseID: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         let resolvedDataSourceID = try await getDataSourceID()
-        let titlePropertyName = try await getDataSourceTitlePropertyName(dataSourceID: resolvedDataSourceID)
+        let properties = await resolveWritableProperties(dataSourceID: resolvedDataSourceID)
         return try await createPageInContainer(
             parentPayload: ["type": "database_id", "database_id": databaseID],
             // Deliberate legacy fallback: database-parent creation requires the legacy API version.
             apiVersion: "2022-06-28",
-            titlePropertyName: titlePropertyName,
+            titlePropertyName: properties.title,
+            ocrPropertyName: properties.ocr,
+            appLinkPropertyName: properties.appLink,
             title: title,
             ocrText: ocrText,
             appLink: appLink
@@ -756,13 +782,15 @@ actor NotionService {
         ocrText: String?,
         appLink: String?
     ) async throws -> String {
-        let titlePropertyName = try await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+        let properties = await resolveWritableProperties(dataSourceID: dataSourceID)
 
         do {
             return try await createPageInContainer(
                 parentPayload: ["type": "data_source_id", "data_source_id": dataSourceID],
                 apiVersion: NotionConfig.dataSourceApiVersion,
-                titlePropertyName: titlePropertyName,
+                titlePropertyName: properties.title,
+                ocrPropertyName: properties.ocr,
+                appLinkPropertyName: properties.appLink,
                 title: title,
                 ocrText: ocrText,
                 appLink: appLink
@@ -790,12 +818,14 @@ actor NotionService {
             
             SyncLogger.log("⚠️ Data source page creation failed (\(dataSourceID)), retrying with database parent (\(fallbackDB)): \(error.localizedDescription)")
             let fallbackDSID = try await fetchDataSourceID(databaseID: fallbackDB)
-            let dbTitleProp = try await getDataSourceTitlePropertyName(dataSourceID: fallbackDSID)
+            let fallbackProperties = await resolveWritableProperties(dataSourceID: fallbackDSID)
             return try await createPageInContainer(
                 parentPayload: ["type": "database_id", "database_id": fallbackDB],
                 // Deliberate legacy fallback: database-parent creation requires the legacy API version.
                 apiVersion: "2022-06-28",
-                titlePropertyName: dbTitleProp,
+                titlePropertyName: fallbackProperties.title,
+                ocrPropertyName: fallbackProperties.ocr,
+                appLinkPropertyName: fallbackProperties.appLink,
                 title: title,
                 ocrText: ocrText,
                 appLink: appLink
@@ -804,7 +834,7 @@ actor NotionService {
     }
 
     /// Generic page creation for any container type.
-    private func createPageInContainer(parentPayload: [String: Any], apiVersion: String?, titlePropertyName: String, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
+    private func createPageInContainer(parentPayload: [String: Any], apiVersion: String?, titlePropertyName: String, ocrPropertyName: String?, appLinkPropertyName: String?, title: String, ocrText: String? = nil, appLink: String? = nil) async throws -> String {
         guard let url = URL(string: "\(NotionConfig.baseURL)/pages") else {
             throw NotionServiceError.invalidURL
         }
@@ -820,8 +850,8 @@ actor NotionService {
             ]
         ]
 
-        if let ocrText {
-             properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
+        if let ocrText, let ocrPropertyName {
+             properties[ocrPropertyName] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
         }
 
         var finalAppLink = appLink
@@ -831,8 +861,8 @@ actor NotionService {
             }
         }
 
-        if let finalAppLink {
-             properties["Open in App"] = [ "url": finalAppLink ]
+        if let finalAppLink, let appLinkPropertyName {
+             properties[appLinkPropertyName] = [ "url": finalAppLink ]
         }
 
         let payload: [String: Any] = [
@@ -856,14 +886,19 @@ actor NotionService {
         return decoded.id
     }
 
-    // MARK: - Query Database Schema
+    // MARK: - Data Source Schema
 
     /// Cached title property names for data sources.
     private var dataSourceTitlePropertyNameCache: [String: String] = [:]
 
-    /// Retrieves the data source schema and finds the name of the title property.
-    internal func getDataSourceTitlePropertyName(dataSourceID: String) async -> String {
-        if let cached = dataSourceTitlePropertyNameCache[dataSourceID] {
+    /// Cached data source schemas (property name → Notion type), keyed by data source ID.
+    private var dataSourceSchemaCache: [String: [String: String]] = [:]
+
+    /// Fetches the data source schema as a property name → type map.
+    /// Returns nil on any failure; callers must treat nil as "schema unknown"
+    /// and fall back to writing mapped/default property names as-is.
+    internal func fetchDataSourceSchema(dataSourceID: String) async -> [String: String]? {
+        if let cached = dataSourceSchemaCache[dataSourceID] {
             return cached
         }
 
@@ -873,32 +908,117 @@ actor NotionService {
             }
 
             let request = try await authorizedRequest(url: url, method: "GET", version: NotionConfig.dataSourceApiVersion)
-            let (data, response) = try await safeRequest(request, context: "getDataSourceTitle")
+            let (data, response) = try await safeRequest(request, context: "fetchDataSourceSchema")
             let validatedData = try validate(data, response)
 
             let decoded: DataSourceSchemaResponse
             do {
                 decoded = try JSONDecoder().decode(DataSourceSchemaResponse.self, from: validatedData)
             } catch {
-                SyncLogger.log("⚠️ Data source title property decode failed for \(dataSourceID): \(error.localizedDescription)")
-                return "Name"
+                SyncLogger.log("⚠️ Data source schema decode failed for \(dataSourceID): \(error.localizedDescription)")
+                return nil
             }
 
-            // Find the property whose type is "title"
+            var schema: [String: String] = [:]
             for (name, property) in decoded.properties ?? [:] {
-                if property.type == "title" {
+                if let type = property.type {
+                    schema[name] = type
+                }
+            }
+
+            dataSourceSchemaCache[dataSourceID] = schema
+            return schema
+        } catch {
+            SyncLogger.log("⚠️ Data source schema fetch failed for \(dataSourceID): \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    /// Retrieves the data source schema and finds the name of the title property.
+    internal func getDataSourceTitlePropertyName(dataSourceID: String) async -> String {
+        if let cached = dataSourceTitlePropertyNameCache[dataSourceID] {
+            return cached
+        }
+
+        if let schema = await fetchDataSourceSchema(dataSourceID: dataSourceID) {
+            // Find the property whose type is "title"
+            for (name, type) in schema {
+                if type == "title" {
                     dataSourceTitlePropertyNameCache[dataSourceID] = name
                     return name
                 }
             }
-
             // Fallback — use "Name" (capitalized) as compatibility default
             SyncLogger.log("⚠️ No title property found in data source \(dataSourceID), using 'Name' fallback")
-            return "Name"
-        } catch {
-            SyncLogger.log("⚠️ Data source title property discovery failed for \(dataSourceID): \(error.localizedDescription)")
-            return "Name"
         }
+
+        return "Name"
+    }
+
+    // MARK: - Property Mapping Resolution
+
+    /// Resolves the Notion property names to write for a create/update payload.
+    ///
+    /// Title uses the user's mapping when it names a title-typed property (or when
+    /// the schema is unknown), otherwise the data source's discovered title property.
+    /// OCR and app-link are optional: nil means the write is skipped, either because
+    /// the user explicitly unmapped the function or because the schema shows the
+    /// mapped property missing or having the wrong Notion type.
+    internal func resolveWritableProperties(dataSourceID: String) async -> (title: String, ocr: String?, appLink: String?) {
+        let mappings = await getPropertyMappings()
+        let schema = await fetchDataSourceSchema(dataSourceID: dataSourceID)
+
+        let title: String
+        if let mappedTitle = mappedName(for: .title, in: mappings) {
+            if let schema, schema[mappedTitle] != SketchPropertyFunction.title.requiredNotionType {
+                if let type = schema[mappedTitle] {
+                    SyncLogger.log("⚠️ Mapped title property '\(mappedTitle)' has Notion type '\(type)'; using discovered title property instead")
+                } else {
+                    SyncLogger.log("⚠️ Mapped title property '\(mappedTitle)' not found in data source schema; using discovered title property instead")
+                }
+                title = await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+            } else {
+                title = mappedTitle
+            }
+        } else {
+            title = await getDataSourceTitlePropertyName(dataSourceID: dataSourceID)
+        }
+
+        return (
+            title,
+            resolveOptionalProperty(.ocrText, mappings: mappings, schema: schema),
+            resolveOptionalProperty(.appLink, mappings: mappings, schema: schema)
+        )
+    }
+
+    /// Resolves an optional (skippable) property function against the mapping and schema.
+    /// Returns nil when the user explicitly unmapped the function, or when the schema is
+    /// known and the property is missing or has the wrong Notion type.
+    private func resolveOptionalProperty(
+        _ function: SketchPropertyFunction,
+        mappings: [String: String],
+        schema: [String: String]?
+    ) -> String? {
+        guard let name = mappedName(for: function, in: mappings) else {
+            return nil
+        }
+
+        guard let schema else {
+            // Schema unknown — write the mapped/default name as-is (previous behavior).
+            return name
+        }
+
+        guard let type = schema[name] else {
+            SyncLogger.log("⚠️ \(function.rawValue): property '\(name)' not found in data source schema; skipping")
+            return nil
+        }
+
+        guard type == function.requiredNotionType else {
+            SyncLogger.log("⚠️ \(function.rawValue): property '\(name)' has Notion type '\(type)' (needs '\(function.requiredNotionType)'); skipping")
+            return nil
+        }
+
+        return name
     }
 
     /// Returns the cached data source ID, or resolves it from the database and caches the result.
@@ -1413,6 +1533,8 @@ actor NotionService {
     // MARK: - Update Page Properties
 
     /// Updates properties of an existing page: Title, OCR text, and Deep Link.
+    /// Property names come from the user's configurable mapping (defaults preserve
+    /// the historical hard-coded names). A function mapped to an empty name is skipped.
     func updatePageProperties(
         pageID: String,
         title: String? = nil,
@@ -1424,22 +1546,29 @@ actor NotionService {
         }
         
         var properties: [String: Any] = [:]
+        let mappings = await getPropertyMappings()
         
         if let title {
-            let resolved = try await resolveSketchesContainer()
             let titleProp: String
-            switch resolved.ref {
-            case .database(let dbID):
-                let dsID = try await fetchDataSourceID(databaseID: dbID)
-                titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
-            case .dataSource(let dsID):
-                titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+            if let mappedTitle = mappedName(for: .title, in: mappings) {
+                // An explicit title mapping skips schema discovery entirely; Notion's
+                // validation below still guards against a mistyped property name.
+                titleProp = mappedTitle
+            } else {
+                let resolved = try await resolveSketchesContainer()
+                switch resolved.ref {
+                case .database(let dbID):
+                    let dsID = try await fetchDataSourceID(databaseID: dbID)
+                    titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+                case .dataSource(let dsID):
+                    titleProp = try await getDataSourceTitlePropertyName(dataSourceID: dsID)
+                }
             }
             properties[titleProp] = [ "title": [ ["text": ["content": title]] ] ]
         }
 
-        if let ocrText {
-            properties["OCR"] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
+        if let ocrText, let ocrPropertyName = mappedName(for: .ocrText, in: mappings) {
+            properties[ocrPropertyName] = [ "rich_text": [ ["text": ["content": ocrText]] ] ]
         }
 
         var finalAppLink = appLink
@@ -1449,8 +1578,8 @@ actor NotionService {
             }
         }
 
-        if let finalAppLink {
-            properties["Open in App"] = [ "url": finalAppLink ]
+        if let finalAppLink, let appLinkPropertyName = mappedName(for: .appLink, in: mappings) {
+            properties[appLinkPropertyName] = [ "url": finalAppLink ]
         }
         
         // If nothing to update, return early
@@ -1962,7 +2091,7 @@ actor NotionService {
         for blockID in blocksToDelete {
             guard let url = URL(string: "\(NotionConfig.baseURL)/blocks/\(blockID)") else { continue }
             let request = try await authorizedRequest(url: url, method: "DELETE")
-            let (data, response) = try await safeRequest(request, context: "deleteLegacyPreview")
+            _ = try await safeRequest(request, context: "deleteLegacyPreview")
             _ = try validate(data, response)
         }
         
