@@ -320,7 +320,7 @@ final class NotionSyncManager {
             let localSketches = try context.fetch(descriptor)
             
             // 1. Fetch all active page IDs from Notion
-            let activePageIDs = try await notionService.fetchActivePageIDs()
+            let activePageIDs = try await notionService.fetchActivePageIDsForLibrarySync()
             
             // Normalize IDs: strip hyphens, lowercase
             let normalizedActive = Set(activePageIDs.map { $0.replacingOccurrences(of: "-", with: "").lowercased() })
