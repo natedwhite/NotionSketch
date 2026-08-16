@@ -723,4 +723,242 @@ final class NotionServiceContainerTests: XCTestCase {
             XCTFail("Expected NotionServiceError.notConfigured, got \(error)")
         }
     }
+
+    // MARK: - Section 12: Property Mapping Tests
+
+    private func makeMappingService(
+        mappings: [String: String],
+        containerInput: String? = nil
+    ) -> NotionService {
+        NotionService(
+            session: mockSession,
+            tokenOverride: self.token,
+            containerInputOverride: containerInput,
+            propertyMappingOverride: mappings
+        )
+    }
+
+    /// Schema carrying the historical property names plus two alternates to map onto.
+    private func fullSchemaJSON() -> Data {
+        try! JSONSerialization.data(withJSONObject: [
+            "properties": [
+                "Name": ["type": "title"],
+                "OCR": ["type": "rich_text"],
+                "Open in App": ["type": "url"],
+                "Notes": ["type": "rich_text"],
+                "Launch": ["type": "url"]
+            ]
+        ], options: [])
+    }
+
+    private func okResponse(for request: URLRequest, body: Data) -> (HTTPURLResponse, Data) {
+        (
+            HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: "1.1",
+                headerFields: ["Content-Type": "application/json"]
+            )!,
+            body
+        )
+    }
+
+    func testDefaultMappingResolvesHardCodedNames() async throws {
+        service = makeMappingService(mappings: [:])
+
+        MockURLProtocol.setHandler { [self] request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Notion-Version"), "2025-09-03")
+            return self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(resolved.title, "Name")
+        XCTAssertEqual(resolved.ocr, "OCR")
+        XCTAssertEqual(resolved.appLink, "Open in App")
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 1)
+    }
+
+    func testCustomMappingResolvesMappedNames() async throws {
+        service = makeMappingService(mappings: [
+            SketchPropertyFunction.ocrText.rawValue: "Notes",
+            SketchPropertyFunction.appLink.rawValue: "Launch"
+        ])
+
+        MockURLProtocol.setHandler { [self] request in
+            XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+            return self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(resolved.title, "Name")
+        XCTAssertEqual(resolved.ocr, "Notes")
+        XCTAssertEqual(resolved.appLink, "Launch")
+    }
+
+    func testUnmappedFunctionIsSkipped() async throws {
+        service = makeMappingService(mappings: [
+            SketchPropertyFunction.ocrText.rawValue: ""
+        ])
+
+        MockURLProtocol.setHandler { [self] request in
+            self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(resolved.title, "Name")
+        XCTAssertNil(resolved.ocr)
+        XCTAssertEqual(resolved.appLink, "Open in App")
+    }
+
+    func testWrongTypeMappingIsSkipped() async throws {
+        // "Open in App" is a url property; ocrText requires rich_text.
+        service = makeMappingService(mappings: [
+            SketchPropertyFunction.ocrText.rawValue: "Open in App"
+        ])
+
+        MockURLProtocol.setHandler { [self] request in
+            self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertNil(resolved.ocr)
+        XCTAssertEqual(resolved.appLink, "Open in App")
+    }
+
+    func testMissingMappedPropertyIsSkipped() async throws {
+        service = makeMappingService(mappings: [
+            SketchPropertyFunction.ocrText.rawValue: "Does Not Exist"
+        ])
+
+        MockURLProtocol.setHandler { [self] request in
+            self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertNil(resolved.ocr)
+        XCTAssertEqual(resolved.appLink, "Open in App")
+    }
+
+    func testWrongTypeTitleMappingFallsBackToDiscoveredTitle() async throws {
+        // "OCR" is rich_text; the title function requires the title-typed property.
+        service = makeMappingService(mappings: [
+            SketchPropertyFunction.title.rawValue: "OCR"
+        ])
+
+        MockURLProtocol.setHandler { [self] request in
+            self.okResponse(for: request, body: self.fullSchemaJSON())
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(resolved.title, "Name")
+    }
+
+    func testSchemaFailurePassesDefaultsThrough() async throws {
+        service = makeMappingService(mappings: [:])
+
+        MockURLProtocol.setHandler { request in
+            (
+                HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!,
+                Data()
+            )
+        }
+
+        let resolved = await service.resolveWritableProperties(dataSourceID: Self.dataSourceID)
+        XCTAssertEqual(resolved.title, "Name")
+        XCTAssertEqual(resolved.ocr, "OCR")
+        XCTAssertEqual(resolved.appLink, "Open in App")
+    }
+
+    func testCreatePageUsesMappedPropertyNames() async throws {
+        service = makeMappingService(
+            mappings: [
+                SketchPropertyFunction.ocrText.rawValue: "Notes",
+                SketchPropertyFunction.appLink.rawValue: "Launch"
+            ],
+            containerInput: Self.dataSourceURL
+        )
+
+        var callCount = 0
+        MockURLProtocol.setHandler { [self] request in
+            defer { callCount += 1 }
+            switch callCount {
+            case 0:
+                XCTAssertEqual(request.httpMethod, "GET")
+                XCTAssertEqual(request.url?.path, "/v1/data_sources/\(Self.dataSourceID)")
+                return self.okResponse(for: request, body: self.fullSchemaJSON())
+
+            case 1:
+                XCTAssertEqual(request.httpMethod, "POST")
+                XCTAssertEqual(request.url?.path, "/v1/pages")
+
+                let body = self.bodyJSON(from: request)
+                let props = body["properties"] as? [String: Any]
+                XCTAssertNotNil(props?["Name"])
+                XCTAssertNotNil(props?["Notes"])
+                XCTAssertNotNil(props?["Launch"])
+                XCTAssertNil(props?["OCR"])
+                XCTAssertNil(props?["Open in App"])
+
+                return self.okResponse(for: request, body: self.createPageResponse(id: Self.pageID))
+
+            default:
+                XCTFail("Unexpected request count: \(callCount)")
+                return (
+                    HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!,
+                    Data()
+                )
+            }
+        }
+
+        // A non-notionsketch appLink avoids the URL-shortening path (which uses URLSession.shared).
+        let pageID = try await service.createPageInDatabase(title: "Mapped", ocrText: "hello", appLink: "https://example.com/x")
+        XCTAssertEqual(pageID, Self.pageID)
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 2)
+    }
+
+    func testUpdatePagePropertiesUsesMappedNames() async throws {
+        service = makeMappingService(
+            mappings: [
+                SketchPropertyFunction.ocrText.rawValue: "Notes"
+            ],
+            containerInput: Self.dataSourceURL
+        )
+
+        MockURLProtocol.setHandler { [self] request in
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            XCTAssertEqual(request.url?.path, "/v1/pages/\(Self.pageID)")
+
+            let body = self.bodyJSON(from: request)
+            let props = body["properties"] as? [String: Any]
+            XCTAssertNotNil(props?["Notes"])
+            XCTAssertNil(props?["OCR"])
+
+            return self.okResponse(for: request, body: Data())
+        }
+
+        try await service.updatePageProperties(pageID: Self.pageID, ocrText: "hello")
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 1)
+    }
+
+    func testUpdatePagePropertiesSkipsUnmappedFunction() async throws {
+        service = makeMappingService(
+            mappings: [
+                SketchPropertyFunction.ocrText.rawValue: ""
+            ],
+            containerInput: Self.dataSourceURL
+        )
+
+        MockURLProtocol.setHandler { request in
+            XCTFail("No request should be sent when every mapped function is skipped")
+            return (
+                HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: "1.1", headerFields: nil)!,
+                Data()
+            )
+        }
+
+        try await service.updatePageProperties(pageID: Self.pageID, ocrText: "hello")
+        XCTAssertEqual(MockURLProtocol.snapshotRequests().count, 0)
+    }
 }
