@@ -27,6 +27,9 @@ final class NotionSyncManager {
     private var documentStates: [String: DocumentSyncState] = [:]
     private let notionService = NotionService()
     
+    /// Re-entrancy guard for library sync (see syncLibrary).
+    private var isSyncingLibrary = false
+    
     /// Requests a sync for the given document with a debounce delay.
     func requestSync(document: SketchDocument, delay: Duration = .seconds(10)) {
         let id = document.id.uuidString
@@ -312,6 +315,17 @@ final class NotionSyncManager {
     func syncLibrary(context: ModelContext) async {
         guard SettingsManager.shared.isConfigured else { return }
         
+        // Re-entrancy guard: the library view can trigger overlapping syncs
+        // (on appear, on foreground, pull-to-refresh, .task restarts). Overlapping
+        // runs each decide to import the same remote pages before either inserts,
+        // producing duplicate local sketches with the same notionPageID.
+        guard !isSyncingLibrary else {
+            SyncLogger.log("⏭️ Library Sync already in progress — skipping duplicate run")
+            return
+        }
+        isSyncingLibrary = true
+        defer { isSyncingLibrary = false }
+        
         SyncLogger.log("🔄 Starting Library Sync...")
         
         do {
@@ -324,10 +338,23 @@ final class NotionSyncManager {
             
             // Normalize IDs: strip hyphens, lowercase
             let normalizedActive = Set(activePageIDs.map { $0.replacingOccurrences(of: "-", with: "").lowercased() })
-            var localMap = Dictionary(uniqueKeysWithValues: localSketches.compactMap { sketch -> (String, SketchDocument)? in
-                guard let id = sketch.notionPageID else { return nil }
-                return (id.replacingOccurrences(of: "-", with: "").lowercased(), sketch)
-            })
+            
+            // Build the local ID map tolerantly. Dictionary(uniqueKeysWithValues:)
+            // traps on duplicate keys, and duplicate local copies of the same Notion
+            // page can exist (e.g. from earlier overlapping sync runs): the same
+            // notionPageID on two sketches would crash every sync here. Keep the
+            // newest copy (the fetch is sorted newest-first) and delete the extras.
+            var localMap: [String: SketchDocument] = [:]
+            for sketch in localSketches {
+                guard let id = sketch.notionPageID else { continue }
+                let key = id.replacingOccurrences(of: "-", with: "").lowercased()
+                if localMap[key] == nil {
+                    localMap[key] = sketch
+                } else {
+                    SyncLogger.log("🧹 Removing duplicate local copy of '\(sketch.title)' (\(id))")
+                    context.delete(sketch)
+                }
+            }
             
             SyncLogger.log("📋 Library Status: \(normalizedActive.count) active remote, \(localMap.count) synced local")
             
