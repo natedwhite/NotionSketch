@@ -414,6 +414,15 @@ final class NotionSyncManager {
                         }
                     }
                 }
+
+                // Drain remaining results. group.next() above only runs when the
+                // concurrency cap is hit, so without this drain the final ≤3 imported
+                // pages are fetched and decoded but never collected or inserted.
+                while let importedData = await group.next() {
+                    if let data = importedData {
+                        importedSketchData.append(data)
+                    }
+                }
             }
             
             // 4. Insert imported sketches
