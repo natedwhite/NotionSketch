@@ -152,7 +152,12 @@ struct DrawingListView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled(true)
             Button("Rename") {
-                renamingSketch?.title = renameText
+                if let sketch = renamingSketch {
+                    sketch.title = renameText
+                    // A rename is a local edit: stamp it so the last-write-wins
+                    // pull check doesn't treat an older remote title as newer.
+                    sketch.lastEditedLocally = Date()
+                }
                 renamingSketch = nil
             }
             Button("Cancel", role: .cancel) {
@@ -173,7 +178,7 @@ struct DrawingListView: View {
         modelContext.insert(sketch)
         selectedSketch = sketch
     }
-
+    
     private func deleteSketch(_ sketch: SketchDocument) {
         let pageID = sketch.notionPageID
         

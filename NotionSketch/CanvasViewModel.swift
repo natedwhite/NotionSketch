@@ -98,6 +98,9 @@ final class CanvasViewModel {
     /// inside `document.whiteboard` and encodes it back to JSON.
     func drawingDidChange(_ drawing: PKDrawing) {
         currentDrawing = drawing
+        // Mark the local edit time so library sync's last-write-wins check can
+        // tell a genuine local edit apart from an older remote one.
+        document.lastEditedLocally = Date()
 
         if document.contentVersion == 0 {
             // Legacy path: persist PKDrawing directly, exactly as before.
@@ -167,7 +170,7 @@ final class CanvasViewModel {
         guard SettingsManager.shared.isConfigured else { return }
         
         do {
-            if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID) {
+            if let (title, _, _) = try await notionService.fetchPageDetails(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")

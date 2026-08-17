@@ -30,6 +30,11 @@ final class SketchDocument {
     /// Content format version: 0 = legacy PKDrawing-only, 1 = whiteboard JSON.
     var contentVersion: Int = 0
 
+    /// When the sketch was last edited locally (drawing change or rename).
+    /// Compared against the Notion page's last-edited time for last-write-wins pulls.
+    /// Additive optional property — migration-safe like the whiteboard properties above.
+    var lastEditedLocally: Date? = nil
+
     init(
         title: String = "Untitled Sketch",
         drawingData: Data = Data(),
@@ -140,4 +145,3 @@ final class SketchDocument {
         self.thumbnailData = image.pngData()
     }
 }
-
