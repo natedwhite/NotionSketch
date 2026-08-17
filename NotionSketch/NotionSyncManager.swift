@@ -285,7 +285,7 @@ final class NotionSyncManager {
          
           do {
                // Fetch Metadata
-                if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID),
+                if let (title, _, _) = try await notionService.fetchPageDetails(pageID: pageID),
                    !title.isEmpty && title != document.title {
                        document.title = title
                }
@@ -304,6 +304,33 @@ final class NotionSyncManager {
          } catch {
              SyncLogger.log("❌ Pull failed: \(error.localizedDescription)")
          }
+    }
+    
+    /// Last-write-wins pull decision for an existing synced sketch.
+    ///
+    /// Pulls only when the Notion page's last-edited time is newer than both the
+    /// last local edit and the marker of our last fully-successful sync. The
+    /// lastSyncedAt comparison keeps our own completed pushes — which bump the
+    /// page's last_edited_time on the server — from echoing back as pulls.
+    internal static func shouldPullRemoteChanges(
+        remoteEditedAt: Date?,
+        lastSyncedAt: Date?,
+        lastEditedLocally: Date?,
+        createdAt: Date
+    ) -> Bool {
+        guard let remoteEditedAt else { return false }
+
+        // The remote edit must be newer than the last local edit (or creation,
+        // for sketches never edited locally, e.g. fresh imports).
+        let localEdited = lastEditedLocally ?? createdAt
+        guard remoteEditedAt > localEdited else { return false }
+
+        // And newer than our last completed sync marker (echo guard).
+        if let lastSyncedAt, remoteEditedAt <= lastSyncedAt {
+            return false
+        }
+
+        return true
     }
     
     // MARK: - Library Sync (Deletions & Imports)
@@ -400,7 +427,7 @@ final class NotionSyncManager {
                             
                              do {
                                   // A. Fetch Details
-                                   guard let (title, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
+                                   guard let (title, _, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
                                       SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
                                       return nil
                                   }
@@ -430,12 +457,39 @@ final class NotionSyncManager {
                             }
                         }
                     } else {
-                        // 4. Update existing? (Optional: Sync Title if changed)
+                        // 4. Existing match: refresh the title, and pull the full drawing
+                        // when the Notion page was edited more recently than the local sketch.
                         if let existing = localMap[normalizedRemote] {
                             Task {
-                                guard let (title, _) = try? await notionService.fetchPageDetails(pageID: existing.notionPageID ?? "") else { return }
-                                if !title.isEmpty && title != existing.title {
-                                    existing.title = title
+                                guard let pageID = existing.notionPageID,
+                                      let details = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
+
+                                // Last-write-wins: pull only when the remote edit is newer than
+                                // both the last local edit and our last fully-successful sync.
+                                // The lastSyncedAt comparison keeps our own completed pushes
+                                // (which bump Notion's last_edited_time) from echoing back.
+                                if Self.shouldPullRemoteChanges(
+                                    remoteEditedAt: details.lastEditedTime,
+                                    lastSyncedAt: existing.lastSyncedAt,
+                                    lastEditedLocally: existing.lastEditedLocally,
+                                    createdAt: existing.createdAt
+                                ) {
+                                    SyncLogger.log("⬇️ Remote changes are newer — pulling '\(existing.title)'")
+                                    if let encoding = try? await notionService.fetchPageBlocks(pageID: pageID),
+                                       !encoding.isEmpty,
+                                       let newDrawing = try? notionService.decodeDrawing(from: encoding) {
+                                        existing.drawing = newDrawing
+                                        existing.updateThumbnail()
+                                        SyncLogger.log("🎨 Pulled remote drawing update for '\(existing.title)'")
+                                    }
+                                    if !details.title.isEmpty && details.title != existing.title {
+                                        existing.title = details.title
+                                    }
+                                    // Record the absorbed remote timestamp so the same edit
+                                    // is not pulled again on the next library sync.
+                                    existing.lastSyncedAt = details.lastEditedTime ?? Date()
+                                } else if !details.title.isEmpty && details.title != existing.title {
+                                    existing.title = details.title
                                 }
                             }
                         }
