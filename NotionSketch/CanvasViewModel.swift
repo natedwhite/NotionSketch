@@ -170,7 +170,7 @@ final class CanvasViewModel {
         guard SettingsManager.shared.isConfigured else { return }
         
         do {
-            if let (title, _, _) = try await notionService.fetchPageDetails(pageID: pageID) {
+            if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID) {
                 // 1. Sync Title
                 if !title.isEmpty && title != document.title {
                     SyncLogger.log("🔄 Title synced from Notion: '\(title)'")
