@@ -285,7 +285,7 @@ final class NotionSyncManager {
          
           do {
                // Fetch Metadata
-                if let (title, _, _) = try await notionService.fetchPageDetails(pageID: pageID),
+                if let (title, _) = try await notionService.fetchPageDetails(pageID: pageID),
                    !title.isEmpty && title != document.title {
                        document.title = title
                }
@@ -427,7 +427,7 @@ final class NotionSyncManager {
                             
                              do {
                                   // A. Fetch Details
-                                   guard let (title, _, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
+                                   guard let (title, _) = try await self.notionService.fetchPageDetails(pageID: remoteID) else {
                                       SyncLogger.log("⚠️ Failed to fetch details for \(remoteID)")
                                       return nil
                                   }
@@ -462,7 +462,7 @@ final class NotionSyncManager {
                         if let existing = localMap[normalizedRemote] {
                             Task {
                                 guard let pageID = existing.notionPageID,
-                                      let details = try? await notionService.fetchPageDetails(pageID: pageID) else { return }
+                                      let details = try? await notionService.fetchPageTitleAndEditTime(pageID: pageID) else { return }
 
                                 // Last-write-wins: pull only when the remote edit is newer than
                                 // both the last local edit and our last fully-successful sync.
